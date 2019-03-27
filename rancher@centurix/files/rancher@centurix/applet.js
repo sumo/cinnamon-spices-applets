@@ -3,8 +3,15 @@ const PopupMenu = imports.ui.popupMenu;
 const Lang = imports.lang;
 const Settings = imports.ui.settings;
 const Gtk = imports.gi.Gtk;
-const Homestead = imports.applet.homestead;
-const Util = imports.applet.util;
+let Homestead, Util;
+if (typeof require !== 'undefined') {
+	Homestead = require('./homestead');
+	Util = require('./util');
+} else {
+	const AppletDir = imports.ui.appletManager.applets['rancher@centurix'];
+	Homestead = AppletDir.homestead;
+	Util = AppletDir.util;
+}
 const MessageTray = imports.ui.messageTray;
 const Main = imports.ui.main;
 const St = imports.gi.St;
@@ -49,8 +56,9 @@ Rancher.prototype = {
 		Applet.IconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
 
 		try {
+		    this.menuManager = new PopupMenu.PopupMenuManager(this);
 			this.menu = new Applet.AppletPopupMenu(this, orientation);
-			this._menuManager.addMenu(this.menu);
+			this.menuManager.addMenu(this.menu);
 
 			this._msgsrc = new MessageTray.SystemNotificationSource("Rancher");
 			Main.messageTray.add(this._msgsrc);
@@ -169,13 +177,7 @@ Rancher.prototype = {
 	},
 
 	on_applet_clicked: function(event) {
-		try {
-			if (!this.menu.isOpen) {
-				this.menu.toggle();
-			}
-		} catch(e) {
-			global.log(UUID + '::on_applet_clicked: ' + e);
-		}
+		this.menu.toggle();
 	},
 
 	editHomestead: function() {
@@ -249,7 +251,7 @@ Rancher.prototype = {
 	},
 
 	openBrowser: function(url) {
-		matches = (new RegExp('\\("(.*?)"\\)')).exec(url);
+		let matches = (new RegExp('\\("(.*?)"\\)')).exec(url);
 		if (matches && matches.length > 0) {
 			Main.Util.spawnCommandLine("xdg-open http://" + matches[1]);
 		}
@@ -259,13 +261,17 @@ Rancher.prototype = {
 		Main.Util.spawnCommandLine("xdg-open http://laravel.com/docs/homestead");
 	},
 
+	openVagrantDownload: function() {
+		Main.Util.spawnCommandLine("xdg-open https://www.vagrantup.com/downloads.html");
+	},
+
 	editHosts: function() {
 		Main.Util.spawnCommandLine("gksudo " + this.editor + " /etc/hosts");
 	},
 
 	updateApplet: function(exists, status) {
 		try {
-			text_status = "";
+			let text_status = "";
 			if (!exists) {
 				this.set_applet_icon_path(ICON_MISSING);
 				this.set_applet_tooltip(_("Rancher: Homestead missing or not configured."));
@@ -273,6 +279,12 @@ Rancher.prototype = {
 			}
 
 			this.set_applet_icon_path(ICON_DOWN);
+
+			if (status == Homestead.STATUS_VAGRANT_OUT_OF_DATE) {
+				this.set_applet_icon_path(ICON_MISSING);
+				this.set_applet_tooltip(_("Vagrant is out of date, please update."));
+				this.notification(_("Vagrant is out of date, please update."));				
+			}
 
 			if (status == Homestead.STATUS_KERNAL_NOT_LOADED) {
 				this.set_applet_icon_path(ICON_MISSING);
@@ -326,6 +338,13 @@ Rancher.prototype = {
 				return false;
 			}
 
+			if (status == Homestead.STATUS_VAGRANT_OUT_OF_DATE) {
+				this.menu.addMenuItem(this.newIconMenuItem('apport', _('Vagrant is out of date for this version of Homestead, please update.'), null, {reactive: false}));
+				this.menu.addMenuItem(this.newIconMenuItem('emblem-web', _('Click here for the Vagrant download page.'), this.openVagrantDownload));
+				this.menu.addMenuItem(this.newIconMenuItem('view-refresh', _('Refresh this menu'), this.refreshApplet));
+				return false;
+			}
+
 			this.menu.addMenuItem(this.newSwitchMenuItem(_('Status') + text_status, (status == Homestead.STATUS_RUNNING), this.homesteadToggle));
 			this.menu.addMenuItem(this.newSeparator());
 			if (status == Homestead.STATUS_RUNNING) {
@@ -340,7 +359,7 @@ Rancher.prototype = {
 
 			if (exists) {
 				this.menu.addMenuItem(this.newSeparator());
-				config = this.homestead.parseConfig();
+				let config = this.homestead.parseConfig();
 
 				this.subMenuConfig = new PopupMenu.PopupSubMenuMenuItem(_('Configuration'));
 				this.subMenuConfig.menu.addMenuItem(this.newIconMenuItem('package_network', _('IP: ') + config.ip, null, {reactive: false}));

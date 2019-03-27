@@ -1,11 +1,9 @@
-var gulp = require('gulp');
-var zip = require('gulp-zip');
-var del = require('del');
-var clear = require('clear');
-var exec = require('child_process').exec;
+const gulp = require('gulp');
+const clear = require('clear');
+const exec = require('child_process').exec;
 
 gulp.task('install', (cb)=>{
-  exec('cp -arf ./files/IcingTaskManager@json/3.4/* ~/.local/share/cinnamon/applets/IcingTaskManager@json && cp -af ./files/IcingTaskManager@json/metadata.json ~/.local/share/cinnamon/applets/IcingTaskManager@json && cp -af ./files/IcingTaskManager@json/icon.png ~/.local/share/cinnamon/applets/IcingTaskManager@json', function (err, stdout, stderr) {
+  exec('cp -arf ./files/IcingTaskManager@json/ ~/.local/share/cinnamon/applets/ && cp -af ./files/IcingTaskManager@json/metadata.json ~/.local/share/cinnamon/applets/IcingTaskManager@json && cp -af ./files/IcingTaskManager@json/icon.png ~/.local/share/cinnamon/applets/IcingTaskManager@json', function (err, stdout, stderr) {
     console.log(stdout);
     console.log(stderr);
     cb(err);
@@ -21,7 +19,7 @@ gulp.task('reload', ['install'], (cb)=>{
 })
 
 gulp.task('watch', ()=> {
-  gulp.watch('./files/IcingTaskManager@json/3.4/**/**/**/**/*.{js,json,py,css,md,po}', ['reload']);
+  gulp.watch('./files/IcingTaskManager@json/**/**/**/**/*.{js,json,py,css,md,po}', ['reload']);
 });
 
 gulp.task('clear-terminal', ()=> {
@@ -29,8 +27,8 @@ gulp.task('clear-terminal', ()=> {
 });
 
 gulp.task('spawn-watch', ['clear-terminal'], ()=> {
- var spawnWatch = ()=> {
-    var proc = require('child_process').spawn('gulp', ['watch'], {stdio: 'inherit'});
+ let spawnWatch = ()=> {
+    let proc = require('child_process').spawn('gulp', ['watch'], {stdio: 'inherit'});
     proc.on('close', function (code) {
       spawnWatch();
     });

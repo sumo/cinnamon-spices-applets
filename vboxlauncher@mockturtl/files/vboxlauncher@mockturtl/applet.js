@@ -11,8 +11,14 @@ const UUID = "vboxlauncher@mockturtl"
 const ICON = "virtualbox"
 
 const CMD_VBOX = "virtualbox"
-const CMD_VBOX_VM = CMD_VBOX + " --startvm "
-const CMD_VBOX_LIST = "vboxmanage list vms"
+const CMD_VBOXMANAGE = "vboxmanage"
+
+const CMD_VBOX_VM = CMD_VBOXMANAGE + " startvm "
+const CMD_VBOX6_VM = CMD_VBOXMANAGE + " startvm "
+const CMD_VBOX_LIST = CMD_VBOXMANAGE + " list vms"
+const CMD_VBOX_LIST_RUN = CMD_VBOXMANAGE + " list runningvms"
+const CMD_VBOX_VERSION = CMD_VBOXMANAGE + " -v"
+var VBOX_ISRUNNING = "0"
 
 const CMD_VMPLAYER = "vmplayer"
 const VMWARE_DIR = GLib.get_home_dir() + "/vmware"
@@ -106,9 +112,17 @@ MyApplet.prototype = {
     return INSTALLED_PROGRAMS[cmd]
   }
 
-, addLauncher: function(label, callback) {
-    let i = new PopupMenu.PopupMenuItem(label)
-    i.connect(SIGNAL_ACTIVATE, Lang.bind(this, callback))
+, addLauncher: function(label, callback, callbackHeadless) {
+    let i;
+    if (callbackHeadless) {
+      i = new PopupMenu.PopupSubMenuMenuItem(label)
+      i.menu.addAction(_("Display"), callback)
+      i.menu.addAction(_("Headless"), callbackHeadless)
+    } else {
+      i = new PopupMenu.PopupMenuItem(label)
+      i.connect(SIGNAL_ACTIVATE, Lang.bind(this, callback))
+    }
+
     this.menu.addMenuItem(i)
   }
 
@@ -135,18 +149,35 @@ MyApplet.prototype = {
     return 1
   }
 
+, vboxMajorVersion: function() {
+  let [res, list, err, status] = GLib.spawn_command_line_sync(CMD_VBOX_VERSION)
+  return parseInt(list.toString()[0])
+}
+
 // add menu items for all Virtualbox images
 , parseVboxImages: function(out) {
     if (!this.isInstalled(CMD_VBOX))
       return
 
     let [res, list, err, status] = GLib.spawn_command_line_sync(CMD_VBOX_LIST)
+    let [resrun, listrun, errrun, statusrun] = GLib.spawn_command_line_sync(CMD_VBOX_LIST_RUN)
     if (list.length != 0) {
       let machines = list.toString().split("\n")
+      let machinesrun = listrun.toString().split("\n")
+      //global.log(machines);
+      //global.log(machinesrun);
       for (let i = 0; i < machines.length; i++) {
         let machine = machines[i]
         if (machine == "") continue
-        this.addVboxImage(machine)
+        for (let j = 0; j < machinesrun.length; j++) {
+            let machinerun = machinesrun[j]
+            if (machinerun == "") continue
+            if (machine == machinerun) {
+                VBOX_ISRUNNING = "1";
+            }
+        }
+        this.addVboxImage(machine);
+        VBOX_ISRUNNING = "0"
       }
     }
   }
@@ -154,8 +185,16 @@ MyApplet.prototype = {
 , addVboxImage: function(instance) {
     let info = instance.split('" {')
     let name = info[0].replace('"', '')
+    if (VBOX_ISRUNNING == "1") {
+      //diffrent indicators
+      //25C9,25C6,E226,2B22,2B24
+      name = (name+"   \uE226");
+    }
     let id = info[1].replace('}', '')
-    this.addLauncher(name, Lang.bind(this, function() { this.startVboxImage(id) }))
+    this.addLauncher(name,
+      Lang.bind(this, function() { this.startVboxImage(id) }),
+      Lang.bind(this, function() { this.startVboxImageHeadless(id) })
+    )
   }
 
 // add menu items for all VMWare Player images
@@ -211,9 +250,15 @@ MyApplet.prototype = {
   }
   
 ,  startVboxImage: function(id) {
-    Util.spawnCommandLine(CMD_VBOX_VM + id)
+    let cmd = this.vboxMajorVersion() >= 6 ? CMD_VBOX6_VM : CMD_VBOX_VM
+    Util.spawnCommandLine(cmd + id)
   }
-  
+
+,  startVboxImageHeadless: function(id) {
+    let cmd = this.vboxMajorVersion() >= 6 ? CMD_VBOX6_VM : CMD_VBOX_VM
+    Util.spawnCommandLine(cmd + id + " --type headless")
+  }
+
 ,  startVbox: function() {
     Util.spawnCommandLine(CMD_VBOX)
   }

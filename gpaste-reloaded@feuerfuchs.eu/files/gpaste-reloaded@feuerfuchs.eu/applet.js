@@ -1,5 +1,4 @@
-const uuid = imports.applet.uuid;
-const _    = imports.applet._;
+const uuid = "gpaste-reloaded@feuerfuchs.eu";
 
 const Util          = imports.misc.util;
 const Lang          = imports.lang;
@@ -13,12 +12,23 @@ const SignalManager = imports.misc.signalManager;
 
 let GPaste; // Will be assigned in entry point
 
-const AppletDir                = imports.ui.appletManager.applets[uuid];
-const GPasteSearchItem         = AppletDir.GPasteSearchItem;
-const GPasteHistoryItem        = AppletDir.GPasteHistoryItem;
-const GPasteHistoryListItem    = AppletDir.GPasteHistoryListItem;
-const GPasteNewItemDialog      = AppletDir.GPasteNewItemDialog;
-const GPasteNotInstalledDialog = AppletDir.GPasteNotInstalledDialog;
+let _, GPasteSearchItem, GPasteHistoryItem, GPasteHistoryListItem, GPasteNewItemDialog, GPasteNotInstalledDialog;
+if (typeof require !== 'undefined') {
+    _                        = require('./__init__')._;
+    GPasteSearchItem         = require('./GPasteSearchItem');
+    GPasteHistoryItem        = require('./GPasteHistoryItem');
+    GPasteHistoryListItem    = require('./GPasteHistoryListItem');
+    GPasteNewItemDialog      = require('./GPasteNewItemDialog');
+    GPasteNotInstalledDialog = require('./GPasteNotInstalledDialog');
+} else {
+    const AppletDir          = imports.ui.appletManager.applets[uuid];
+    _                        = AppletDir.__init__._;
+    GPasteSearchItem         = AppletDir.GPasteSearchItem;
+    GPasteHistoryItem        = AppletDir.GPasteHistoryItem;
+    GPasteHistoryListItem    = AppletDir.GPasteHistoryListItem;
+    GPasteNewItemDialog      = AppletDir.GPasteNewItemDialog;
+    GPasteNotInstalledDialog = AppletDir.GPasteNotInstalledDialog;
+}
 
 //
 // Entry point
@@ -149,11 +159,14 @@ GPasteApplet.prototype = {
 
             this._appletSettings = new Settings.AppletSettings(this, uuid, instance_id);
 
-            this._appletSettings.bindProperty(Settings.BindingDirection.IN, "display-track-switch",  "displayTrackSwitch",  this._onDisplaySettingsUpdated, null);
-            this._appletSettings.bindProperty(Settings.BindingDirection.IN, "display-new-item",      "displayNewItem",      this._onDisplaySettingsUpdated, null);
-            this._appletSettings.bindProperty(Settings.BindingDirection.IN, "display-searchbar",     "displaySearchBar",    this._onDisplaySettingsUpdated, null);
-            this._appletSettings.bindProperty(Settings.BindingDirection.IN, "display-gpaste-ui",     "displayGPasteUI",     this._onDisplaySettingsUpdated, null);
-            this._appletSettings.bindProperty(Settings.BindingDirection.IN, "display-empty-history", "displayEmptyHistory", this._onDisplaySettingsUpdated, null);
+            this._appletSettings.bind("display-track-switch",  "displayTrackSwitch",  this._onDisplaySettingsUpdated);
+            this._appletSettings.bind("display-new-item",      "displayNewItem",      this._onDisplaySettingsUpdated);
+            this._appletSettings.bind("display-searchbar",     "displaySearchBar",    this._onDisplaySettingsUpdated);
+            this._appletSettings.bind("display-gpaste-ui",     "displayGPasteUI",     this._onDisplaySettingsUpdated);
+            this._appletSettings.bind("display-empty-history", "displayEmptyHistory", this._onDisplaySettingsUpdated);
+            
+            this._appletSettings.bind("kb-show-history", "kbShowHistory", this._onKeybindingUpdated);
+            this._onKeybindingUpdated();
 
             //
             // Create GPaste Client
@@ -163,7 +176,7 @@ GPasteApplet.prototype = {
             this._historyName      = "";
             this._historyItems     = [];
             this._historyListItems = [];
-            this._signalManager    = new SignalManager.SignalManager(this);
+            this._signalManager    = new SignalManager.SignalManager(null);
 
             GPaste.Client.new(Lang.bind(this, function (obj, result) {
                 this._client = GPaste.Client.new_finish(result);
@@ -172,14 +185,14 @@ GPasteApplet.prototype = {
                 // Watch client signals
 
                 // Client
-                this._signalManager.connect(this._client, 'update',         this._onClientUpdate);
-                this._signalManager.connect(this._client, 'show-history',   this._onClientShowHistory);
-                this._signalManager.connect(this._client, 'switch-history', this._onClientSwitchHistory);
-                this._signalManager.connect(this._client, 'tracking',       this._onClientTracking);
-                this._signalManager.connect(this._client, 'delete-history', this._onClientDeleteHistory);
+                this._signalManager.connect(this._client, 'update',         Lang.bind(this, this._onClientUpdate));
+                this._signalManager.connect(this._client, 'show-history',   Lang.bind(this, this._onClientShowHistory));
+                this._signalManager.connect(this._client, 'switch-history', Lang.bind(this, this._onClientSwitchHistory));
+                this._signalManager.connect(this._client, 'tracking',       Lang.bind(this, this._onClientTracking));
+                this._signalManager.connect(this._client, 'delete-history', Lang.bind(this, this._onClientDeleteHistory));
 
                 // Client settings
-                this._signalManager.connect(this._clientSettings, 'changed::max-displayed-history-size', this._createHistoryItems);
+                this._signalManager.connect(this._clientSettings, 'changed::max-displayed-history-size', Lang.bind(this, this._createHistoryItems));
 
                 //
                 // Init
@@ -323,6 +336,14 @@ GPasteApplet.prototype = {
         // Hide disabled menu items
 
         this._onDisplaySettingsUpdated();
+    },
+    
+    _onKeybindingUpdated: function() {
+        Main.keybindingManager.addHotKey("show-history-" + this.instance_id, this.kbShowHistory, Lang.bind(this, function() {
+            if (!Main.overview.visible && !Main.expo.visible) {
+                this.menu.toggle();
+            }
+        }));
     },
 
     /*

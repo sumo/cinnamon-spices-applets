@@ -27,7 +27,7 @@ const MIN_MENU_WIDTH = 400;
 const GLib = imports.gi.GLib;
 // Set the path constants 
 const APPLET_PATH = imports.ui.appletManager.appletMeta[UUID].path;
-const DATA_PATH = GLib.get_home_dir() + "/.cinnamon/configs/" + UUID;
+const DATA_PATH = GLib.get_home_dir() + "/.cinnamon/" + UUID;
 const ICON_PATH = APPLET_PATH + '/icons/';
 const FEED_CONFIG_FILE = DATA_PATH + "/feeds.json";
 imports.searchPath.push(APPLET_PATH);
@@ -78,6 +78,8 @@ FeedApplet.prototype = {
 
     _init: function(metadata, orientation, panel_height, instance_id) {
         Applet.IconApplet.prototype._init.call(this, orientation, panel_height, instance_id);
+        // Check for dependencies up front
+        this._check_dependencies();
         // Initialize the settings early so we can use them
         this._init_settings();
         this.open_menu = null;
@@ -127,6 +129,28 @@ FeedApplet.prototype = {
                 Lang.bind(this, this._process_feeds));
 
         this.logger.debug("timer_id: " + this.timer_id);
+    },
+
+    notify_send: function(notification, iconPath) {
+        if (iconPath == null)
+            iconPath = this.appletPath + '/icon.png';
+        Util.spawnCommandLine('notify-send "' + notification + '" -i ' + iconPath);
+    },
+
+    notify_installation: function(packageName) {
+        this.notify_send(_("Please install the '%s' package.").format(packageName), null);
+    },
+
+    _check_feedparser: function(output) {
+        if (output == "FAIL") {
+            this.notify_installation('python-feedparser');
+            Util.spawnCommandLine("apturl apt://python-feedparser");
+        }
+    },
+
+    /* private function to check, confirm and install any dependencies */
+    _check_dependencies: function() {
+       Util.spawn_async(['python', APPLET_PATH + '/check_feedparser.py'], Lang.bind(this, this._check_feedparser));
     },
 
     /* private function that connects to the settings-schema and initializes the variables */
@@ -250,11 +274,11 @@ FeedApplet.prototype = {
         let i = 0;
 
         // Find the feeds for the selected instance_name and populate those feeds.
-        for (key in data['instances']) {
+        for (let key in data['instances']) {
             if (data['instances'][key]['name'].trim() === this.instance_name) {
                 let iinterval = data['instances'][key]['interval']; // Not currently used
                 
-                for (fkey in data['instances'][key]['feeds']) {
+                for (let fkey in data['instances'][key]['feeds']) {
                     try {
                         if (data['instances'][key]['feeds'][fkey]['enabled']) {
                             this.feeds[i] = new FeedDisplayMenuItem(
@@ -411,7 +435,7 @@ FeedApplet.prototype = {
             this.feed_to_show = feed_to_show;
             this.feed_to_show.open_menu();
         } else {
-            for (i in this.feeds) {
+            for (let i in this.feeds) {
                 if (this.feeds[i].unread_count > 0) {
                     this.logger.debug("Opening Menu: " + this.feeds[i]);
                     this.feeds[i].open_menu();
@@ -753,7 +777,7 @@ FeedDisplayMenuItem.prototype = {
             this.menuItemCount++;
         }
 
-        let cnt = (this.max_Items > this.unread_count) ? this.max_items : this.unread_count;
+        let cnt = (this.max_items < this.unread_count) ? this.max_items : this.unread_count;
         if(cnt > 0){
             menu_item = new ApplicationContextMenuItem(this, _("Mark Next ") + cnt + _(" Posts Read"), "mark_next_read");
             this.menu.addMenuItem(menu_item, 0);

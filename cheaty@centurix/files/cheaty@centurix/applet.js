@@ -35,24 +35,55 @@ SheetMenuItem.prototype =
 
 	_init: function(sheet, icon, params)
 	{
-		PopupMenu.PopupSubMenuMenuItem.prototype._init.call(this, sheet.name, params);
+		// We're changing the order of the PopupSubMenuMenuItem's actors, keep everything except the init
+        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
 
-		this.actor.add_style_class_name("cheatsheet");
+        this._triangle = null;
 
-		this.icon = new St.Icon({
-			gicon: new Gio.FileIcon({
-				file: Gio.file_new_for_path(icon)
-			}),
-			style_class: 'sheeticon',
-			icon_size: 32
-		});
+        // This check allows PopupSubMenu to be used as a generic scrollable container.
+        if (typeof sheet.name === 'string') {
+            this.actor.add_style_class_name('popup-submenu-menu-item');
+            this.actor.add_style_class_name('cheatsheet');
 
-		this.addActor(this.icon);
-		this.icon.realize();
+            let iconFile = Gio.file_new_for_path(icon);
+            if (iconFile.query_exists(null)) {
+            	let gicon = new Gio.FileIcon({ file: iconFile });
+            	this.icon = new St.Icon({
+            		gicon: gicon,
+            		icon_size: 32,
+            		icon_type: St.IconType.FULLCOLOR,
+            		style_class: "sheeticon"
+            	});
+            	this.addActor(this.icon);
+            }
 
+            this.label = new St.Label({
+            	text: sheet.name,
+                y_expand: true,
+                y_align: Clutter.ActorAlign.CENTER
+            });
+            this.addActor(this.label);
+            this.actor.label_actor = this.label;
+
+            this._triangleBin = new St.Bin({
+            	x_align: St.Align.END
+            });
+            this.addActor(
+            	this._triangleBin, {
+            		expand: true,
+                    span: -1,
+                    align: St.Align.END
+                }
+            );
+
+            this._triangle = PopupMenu.arrowIcon(St.Side.RIGHT);
+            this._triangle.pivot_point = new Clutter.Point({ x: 0.5, y: 0.5 });
+            this._triangleBin.child = this._triangle;
+        }
+
+        this.menu = new PopupMenu.PopupSubMenu(this.actor, this._triangle);
+        this._signals.connect(this.menu, 'open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
 		this._tooltip = new Tooltips.Tooltip(this.actor, sheet.name + " (" + _("version") + " " + sheet.version + ")\n" + sheet.description + "\n" + _("Author:") + " " + sheet.author + "\n" + _("Email:") + " " + sheet.email + "\n" + _("Repository:") + " " + sheet.repository);
-
-		this.actor.style = "padding-right: 45px;";
 	}
 }
 
@@ -95,7 +126,7 @@ DescriptionMenuItem.prototype =
 		code_box.add(code_label);
 
 		if (item.alternatives) {
-			for (alternative in item.alternatives) {
+			for (var alternative in item.alternatives) {
 				let alt_label = new St.Label({ text: 'Alt: ' + item.alternatives[alternative].code, style_class: 'sheet-item-code-alternative'});
 				code_box.add(alt_label);
 			}
@@ -123,8 +154,9 @@ Cheaty.prototype = {
 		this.set_applet_icon_path(ICON);
 		this.set_applet_tooltip(_("Cheaty: Easy access cheatsheets"));
 
+		this.menuManager = new PopupMenu.PopupMenuManager(this);
 		this.menu = new Applet.AppletPopupMenu(this, orientation);
-		this._menuManager.addMenu(this.menu);
+		this.menuManager.addMenu(this.menu);
 
 		this.settingsApiCheck();
 
@@ -143,7 +175,7 @@ Cheaty.prototype = {
 
 		let currentDir = Gio.file_new_for_path(resolveHome(this.cheatsheetFolder));
 
-		let enumerator = currentDir.enumerate_children("standard::*", Gio.FileQueryInfoFlags.NONE, null, null);
+		let enumerator = currentDir.enumerate_children("standard::*", Gio.FileQueryInfoFlags.NONE, null);
 		let file;
 
 		this._sheets = [];
@@ -161,7 +193,7 @@ Cheaty.prototype = {
 
 					let [ok, data, etag] = sheet.load_contents(null);
 					if (ok) {
-						contents = JSON.parse(data);
+						let contents = JSON.parse(data);
 
 						let iconPath = resolveHome(this.cheatsheetFolder) + '/' + sheetName + '/icon.svg';
 
@@ -174,7 +206,7 @@ Cheaty.prototype = {
 							for (var item in contents.sections[section]) {
 								this._sheets[sheetName]._sections[section]._items[item] = new PopupMenu.PopupSubMenuMenuItem('\t\t' + item);
 
-								code = new DescriptionMenuItem(contents.sections[section][item]);
+								let code = new DescriptionMenuItem(contents.sections[section][item]);
 								code.connect("activate", Lang.bind(this, this.copyToClipboard));
 
 								this._sheets[sheetName]._sections[section]._items[item].menu.addMenuItem(code);
@@ -219,22 +251,17 @@ Cheaty.prototype = {
 	},
 
 	copyToClipboard: function(text) {
-		St.Clipboard.get_default().set_text(text.code);
+		St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text.code);
 		this.notification(_("Code copied to the clipboard"));
 	},
 
 	on_applet_clicked: function(event) {
-		try {
-			if (!this.menu.isOpen) {
-				this.menu.toggle();
-			}
-		} catch(e) {
-		}
+		this.menu.toggle();
 	}
 }
 
 function resolveHome(path) {
-	home = GLib.get_home_dir();
+	let home = GLib.get_home_dir();
 	return path.replace('~', home);
 }
 

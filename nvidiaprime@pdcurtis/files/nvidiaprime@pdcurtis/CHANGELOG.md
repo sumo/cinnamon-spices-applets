@@ -1,5 +1,24 @@
 ## Changelog for recent versions
 
+### 3.3.4
+
+  * Use xdg-open in place of gedit or xed to allow use on more distros
+
+### 3.3.3
+
+Fix to allow use with early versions of Cinnamon
+ * Inhibit use of hide_applet_label() unless Cinnamon version 3.2 or higher in use.
+
+### 3.3.2
+
+ * Updates to some tooltips and README.md to reflect the latest changes better.
+
+### 3.3.1
+
+ * Add checks that Nvidia drivers and nvidia-settings are loaded
+ * Allow GPU temperature to be displayed in vertical panels but shorten (by removing the degree symbol) if over 100 degrees on vertical panels.
+ * Update nvidiaprime.pot to identify changes which need to be translated.
+
 ### 3.3.0
 
 Major changes to support vertical panels and to use icons instead of text to harmonise with other cinnamon applets such as nvidia-prime

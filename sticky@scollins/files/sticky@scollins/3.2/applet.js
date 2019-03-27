@@ -12,6 +12,7 @@ const CheckBox = imports.ui.checkBox;
 const DND = imports.ui.dnd;
 const Main = imports.ui.main;
 const ModalDialog = imports.ui.modalDialog;
+const Panel = imports.ui.panel;
 const PopupMenu = imports.ui.popupMenu;
 const Settings = imports.ui.settings;
 const Tooltips = imports.ui.tooltips;
@@ -31,19 +32,22 @@ const EDGE_WIDTH = 10;
 const MIN_HEIGHT = 75;
 const MIN_WIDTH = 125;
 
+const DisplayState = {
+    DESKTOP: 0,
+    RAISED: 1,
+    HIDDEN: 2,
+    PINNED: 3
+}
 
 let applet, noteBox, settings, uuid;
 
-
-// l10n/translation
 function _(str) {
-   let customTranslation = Gettext.dgettext(uuid, str);
-   if(customTranslation != str) {
-      return customTranslation;
-   }
-   return Gettext.gettext(str);
+    let customTranslation = Gettext.dgettext(uuid, str);
+    if(customTranslation != str) {
+        return customTranslation;
+    }
+    return Gettext.gettext(str);
 }
-
 
 function focusText(actor) {
     let currentMode = global.stage_input_mode;
@@ -53,27 +57,61 @@ function focusText(actor) {
     }
 
     actor.grab_key_focus();
-    if ( settings.getValue("raisedState") ) {
-        global.set_stage_input_mode(Cinnamon.StageInputMode.FULLSCREEN);
+}
+
+class PromptDialog extends ModalDialog.ModalDialog {
+    constructor(message, acceptCallback, cancelCallback) {
+        super();
+        global.logWarning(typeof acceptCallback);
+
+        this.acceptCallback = acceptCallback;
+        this.cancelCallback = cancelCallback;
+
+        this.contentLayout.set_style("spacing: 15px;");
+
+        this.contentLayout.add_actor(new St.Label({text: message}));
+        this.entry = new St.Entry({ style_class: "run-dialog-entry"});
+        this.contentLayout.add_actor(this.entry);
+
+        this.setButtons([
+            {
+                label: _("Cancel"),
+                action: Lang.bind(this, this.onCancel),
+                key: Clutter.Escape
+            },
+            {
+                label: _("Ok"),
+                action: Lang.bind(this, this.onOk),
+                key: Clutter.Return
+            }
+        ]);
+
+        this.open();
+    }
+
+    onOk() {
+        let response = this.entry.text;
+        this.close();
+        this.acceptCallback(response);
+    }
+
+    onCancel() {
+        this.close();
+        if (this.cancelCallback) {
+            this.cancelCallback();
+        }
     }
 }
 
-
-function Menu(applet, orientation) {
-    this._init(applet, orientation);
-}
-
-Menu.prototype = {
-    __proto__: PopupMenu.PopupMenu.prototype,
-
-    _init: function(applet, orientation) {
-        PopupMenu.PopupMenu.prototype._init.call(this, applet.actor, orientation);
+class Menu extends PopupMenu.PopupMenu {
+    constructor(applet, orientation) {
+        super(applet.actor, orientation);
         this.actor.hide();
         this.applet = applet;
         applet.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
-    },
+    }
 
-    _connectItemSignals: function(menuItem) {
+    _connectItemSignals(menuItem) {
         menuItem._activeChangeId = menuItem.connect('active-changed', Lang.bind(this, function (menuItem, active) {
             if (active && this._activeMenuItem != menuItem) {
                 if (this._activeMenuItem)
@@ -108,24 +146,20 @@ Menu.prototype = {
                 this._activeMenuItem = null;
             this.length--;
         }));
-    },
+    }
 
-    _onOrientationChanged: function(a, orientation) {
+    _onOrientationChanged(a, orientation) {
         this.setOrientation(orientation);
     }
 }
 
-
-function NoteBase(info) {
-    this._init(info);
-}
-
-NoteBase.prototype = {
-    _init: function(info) {
+class NoteBase {
+    constructor(info) {
         this._dragging = false;
         this._dragOffset = [0, 0];
         this.hasBottom = false;
         this.hasSide = false;
+        this.updateId = -1;
 
         settings.bindWithObject(this, "theme", "defaultTheme");
         settings.bindWithObject(this, "height", "height");
@@ -138,7 +172,7 @@ NoteBase.prototype = {
             if ( this.defaultTheme == "random" ) {
                 let options = settings.getOptions("theme")
                 let keys = Object.keys(options);
-                key = keys[Math.floor(Math.random()*(keys.length-1))];
+                let key = keys[Math.floor(Math.random()*(keys.length-1))];
                 this.theme = options[key];
             }
             else this.theme = this.defaultTheme;
@@ -175,9 +209,9 @@ NoteBase.prototype = {
         this.menu.actor.hide();
 
         this.buildMenu();
-    },
+    }
 
-    buildMenu: function() {
+    buildMenu() {
         this.contentMenuSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this.contentMenuSection);
 
@@ -195,6 +229,12 @@ NoteBase.prototype = {
         this.titleMenuItem = new PopupMenu.PopupMenuItem(this.title ? _("Edit title") : _("Add title"));
         this.contentMenuSection.addMenuItem(this.titleMenuItem);
         this.titleMenuItem.connect("activate", Lang.bind(this, this.editTitle));
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        let saveTemplate = new PopupMenu.PopupMenuItem(_("Save as template"));
+        this.menu.addMenuItem(saveTemplate);
+        saveTemplate.connect("activate", Lang.bind(this, this.promptSaveTemplateName));
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -223,20 +263,20 @@ NoteBase.prototype = {
             this.emit("destroy", this);
         }));
         this.menu.addMenuItem(remove);
-    },
+    }
 
-    setTheme: function(a, b, c, codeName) {
+    setTheme(a, b, c, codeName) {
         this.theme = codeName;
         this.actor.style_class = codeName;
         this.emit("changed");
-    },
+    }
 
-    setBoxShadow: function() {
+    setBoxShadow() {
         if ( this.boxShadow ) this.actor.add_style_pseudo_class("boxshadow");
         else this.actor.remove_style_pseudo_class("boxshadow");
-    },
+    }
 
-    setFont: function() {
+    setFont() {
         let pangoFont = Pango.FontDescription.from_string(this.font);
         let fontString = "";
 
@@ -261,9 +301,9 @@ NoteBase.prototype = {
         fontString += pangoFont.get_family();
 
         this.actor.set_style("font: "+fontString);
-    },
+    }
 
-    checkResize: function(actor, event) {
+    checkResize(actor, event) {
         // start resize if the mouse is in the right place
         if ( this.hasBottom || this.hasSide ) {
             this.isResizing = true;
@@ -273,9 +313,9 @@ NoteBase.prototype = {
                 this.eventId = this.actor.connect("event", Lang.bind(this, this.handleResizeEvent));
         }
         else this.onButtonPress(actor, event);
-    },
+    }
 
-    handleResizeEvent: function(actor, event) {
+    handleResizeEvent(actor, event) {
         // update size now to give visual feedback
         if ( event.type() == Clutter.EventType.MOTION ) {
             let [x, y] = event.get_coords();
@@ -310,14 +350,14 @@ NoteBase.prototype = {
         }
 
         return false;
-    },
+    }
 
-    _onDragBegin: function() {
+    _onDragBegin() {
         if ( !this.previousMode ) this.previousMode = global.stage_input_mode;
         global.set_stage_input_mode(Cinnamon.StageInputMode.FULLSCREEN);
-    },
+    }
 
-    _onDragEnd: function() {
+    _onDragEnd() {
         if ( Main._findModal(this.actor) != -1 ) {
             Main.popModal(this.actor, global.get_current_time());
         }
@@ -326,9 +366,9 @@ NoteBase.prototype = {
             this.previousMode = null;
         }
         this.trackMouse();
-    },
+    }
 
-    _onMotionEvent: function(actor, event) {
+    _onMotionEvent(actor, event) {
         if ( this.isResizing ) return;
         this.hasBottom = false;
         this.hasSide = false;
@@ -347,15 +387,15 @@ NoteBase.prototype = {
             global.unset_cursor();
             this.draggable.inhibit = false;
         }
-    },
+    }
 
-    canSelect: function(x, y) { return false },
+    canSelect(x, y) { return false }
 
-    _onLeave: function() {
+    _onLeave() {
         if ( !this.isResizing ) global.unset_cursor();
-    },
+    }
 
-    toggleMenu: function() {
+    toggleMenu() {
         this.menu.toggle();
 
         //make sure menu is positioned correctly
@@ -376,9 +416,9 @@ NoteBase.prototype = {
         if ( this.actor.x + this.actor.width + this.menu.actor.width > rightEdge )
             this.menu.setArrowSide(St.Side.RIGHT);
         else this.menu.setArrowSide(St.Side.LEFT);
-    },
+    }
 
-    destroy: function(){
+    destroy(){
         this.onNoteRemoved();
         Tweener.addTween(this.actor, {
             opacity: 0,
@@ -386,7 +426,7 @@ NoteBase.prototype = {
             time: DESTROY_TIME,
             onComplete: Lang.bind(this, function() {
                 let parent = this.actor.get_parent();
-                this.parent.remove_child(this.actor);
+                parent.remove_child(this.actor);
                 this.actor.destroy();
             })
         });
@@ -394,26 +434,26 @@ NoteBase.prototype = {
 
         this.menu = null;
         this.menuManager = null;
-    },
+    }
 
     // implemented by individual note types
-    onNoteRemoved: function() { },
+    onNoteRemoved() { }
 
-    trackMouse: function() {
+    trackMouse() {
         if( !Main.layoutManager.isTrackingChrome(this.actor) ) {
             Main.layoutManager.addChrome(this.actor, { doNotAdd: true });
             this._isTracked = true;
         }
-    },
+    }
 
-    untrackMouse: function() {
+    untrackMouse() {
         if( Main.layoutManager.isTrackingChrome(this.actor) ) {
             Main.layoutManager.untrackChrome(this.actor);
             this._isTracked = false;
         }
-    },
+    }
 
-    editTitle: function() {
+    editTitle() {
         this.titleBin.remove_all_children();
 
         let text;
@@ -441,9 +481,9 @@ NoteBase.prototype = {
                     return false;
             }
         }));
-    },
+    }
 
-    uneditTitle: function(update) {
+    uneditTitle(update) {
         if ( update ) {
             if ( this.titleEntry.text == "" ) this.title = undefined;
             else this.title = this.titleEntry.text;
@@ -456,27 +496,42 @@ NoteBase.prototype = {
             this.titleMenuItem.label.text = "Edit title";
         }
         else this.titleMenuItem.label.text = "Add title";
-    },
+    }
 
-    triggerUpdate: function() {
-        if ( !this.updateId ) Mainloop.idle_add(Lang.bind(this, function() {
+    triggerUpdate() {
+        if (this.updateId != -1) {
+            Mainloop.source_remove(this.updateId);
+        }
+        this.updateId = Mainloop.timeout_add_seconds(5, Lang.bind(this, function() {
+            this.updateId = -1;
             this.emit("changed");
-            this.updateId = undefined;
-        }))
+        }));
+    }
+
+    promptSaveTemplateName() {
+        new PromptDialog(_("Enter a name for the template."), Lang.bind(this, this.saveAsTemplate));
+    }
+
+    saveAsTemplate(name) {
+        global.logWarning(name)
+        if (name == "") return;
+
+        let info = this.getInfo();
+        info.name = name;
+        delete info.x;
+        delete info.y;
+        delete info.theme;
+
+        let templates = settings.getValue("templates");
+        templates.push(info);
+        settings.setValue("templates", templates);
     }
 }
 Signals.addSignalMethods(NoteBase.prototype);
 
-
-function Note(info) {
-    this._init(info);
-}
-
-Note.prototype = {
-    __proto__: NoteBase.prototype,
-
-    _init: function(info) {
-        NoteBase.prototype._init.call(this, info);
+class Note extends NoteBase {
+    constructor(info) {
+        super(info);
 
         this.switching = false;
 
@@ -507,7 +562,7 @@ Note.prototype = {
         this.textWrapper.connect("get-preferred-width", Lang.bind(this, this.getPreferedWidth));
         this.text.connect("button-release-event", Lang.bind(this, this.onButtonRelease));
         this.text.connect("button-press-event", Lang.bind(this, this.onButtonPress));
-        this.text.connect("text-changed", Lang.bind(this, function() { this.emit("changed"); }));
+        this.text.connect("text-changed", Lang.bind(this, this.triggerUpdate));
         this.text.connect("cursor-event", Lang.bind(this, this.handleScrollPosition));
         this.text.connect("key-focus-in", Lang.bind(this, this.onTextFocused));
 
@@ -517,9 +572,9 @@ Note.prototype = {
         let switchTypeMenuItem = new PopupMenu.PopupMenuItem(_("Switch to check list"));
         this.contentMenuSection.addMenuItem(switchTypeMenuItem);
         switchTypeMenuItem.connect("activate", Lang.bind(this, this.switchType));
-    },
+    }
 
-    allocate: function(actor, box, flags) {
+    allocate(actor, box, flags) {
         let childBox = new Clutter.ActorBox();
 
         childBox.x1 = box.x1;
@@ -527,29 +582,31 @@ Note.prototype = {
         childBox.y1 = box.y1;
         childBox.y2 = box.y2;
         this.textBox.allocate(childBox, flags);
-    },
+    }
 
-    getPreferedHeight: function(actor, forWidth, alloc) {
+    getPreferedHeight(actor, forWidth, alloc) {
         let [minWidth, natWidth] = actor.get_preferred_width(0);
         let [minHeight, natHeight] = this.text.get_preferred_height(natWidth);
 
         alloc.min_size = minHeight;
         alloc.natural_size = natHeight;
-    },
+    }
 
-    getPreferedWidth: function(actor, forHeight, alloc) {
+    getPreferedWidth(actor, forHeight, alloc) {
         let sbWidth = this.scrollBox.vscroll.width;
         let sNode = this.actor.get_theme_node();
         let width = sNode.adjust_for_width(this.actor.width);
         alloc.min_size = width - sbWidth;
         alloc.natural_size = width - sbWidth;
-    },
+    }
 
-    onNoteRemoved: function() {
+    onNoteRemoved() {
         this.unfocusText();
-    },
+    }
 
-    onButtonRelease: function(actor, event) {
+    onButtonRelease(actor, event) {
+        noteBox.setChildOnTop(this);
+
         if ( event.get_button() == 3 ) return true;
 
         if ( this.pointerGrabbed ) {
@@ -566,9 +623,9 @@ Note.prototype = {
         }
 
         return false;
-    },
+    }
 
-    onButtonPress: function(actor, event) {
+    onButtonPress(actor, event) {
         if ( event.get_button() == 3 ) {
             this.toggleMenu();
             return true;
@@ -584,17 +641,17 @@ Note.prototype = {
         }
 
         return false;
-    },
+    }
 
-    canSelect: function(x, y) {
+    canSelect(x, y) {
         if ( y >= this.scrollBox.get_transformed_position()[1] &&
              x > this.text.get_transformed_position()[0] &&
              x < (this.text.get_transformed_position()[0] + this.text.width) ) return true;
 
         return false;
-    },
+    }
 
-    handleScrollPosition: function(text, geometry) {
+    handleScrollPosition(text, geometry) {
         let textHeight = this.textBox.height;
         let scrollHeight = this.scrollBox.height;
 
@@ -613,14 +670,14 @@ Note.prototype = {
             let desiredPosition = cursorY + geometry.height*3;
             adjustment.set_value(( desiredPosition < textHeight ? desiredPosition : textHeight ) - scrollHeight);
         }
-    },
+    }
 
-    onTextFocused: function() {
+    onTextFocused() {
         if ( !this.unfocusId ) this.unfocusId = this.text.connect("key-focus-out", Lang.bind(this, this.unfocusText));
         this.actor.add_style_pseudo_class("focus");
-    },
+    }
 
-    unfocusText: function() {
+    unfocusText() {
         if ( this.unfocusId ) {
             this.text.disconnect(this.unfocusId);
             this.unfocusId = null;
@@ -634,9 +691,9 @@ Note.prototype = {
         }
         this.previousMode = null;
         this.actor.remove_style_pseudo_class("focus");
-    },
+    }
 
-    getInfo: function() {
+    getInfo() {
         let info = { x: this.actor.x, y: this.actor.y, height: this.actor.height, width: this.actor.width, theme: this.theme };
         if ( this.title ) info.title = this.title;
 
@@ -667,42 +724,35 @@ Note.prototype = {
         }
 
         return info;
-    },
+    }
 
-    copy: function() {
+    copy() {
         let cursor = this.text.get_cursor_position();
         let selection = this.text.get_selection_bound();
         let text;
         if ( cursor == selection ) text = this.text.get_text();
         else text = this.text.get_selection();
-        St.Clipboard.get_default().set_text(text);
-    },
+        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+    }
 
-    paste: function() {
-        St.Clipboard.get_default().get_text(Lang.bind(this, function(cb, text) {
+    paste() {
+        St.Clipboard.get_default().get_text(St.ClipboardType.CLIPBOARD, Lang.bind(this, function(cb, text) {
             let cursor = this.text.get_cursor_position();
             let selection = this.text.get_selection_bound();
             if ( cursor != selection ) this.text.delete_selection();
             this.text.insert_text(text, this.text.get_cursor_position());
         }));
-    },
+    }
 
-    switchType: function() {
+    switchType() {
         this.switching = true;
         this.emit("changed", true);
     }
 }
 
-
-function CheckList(info) {
-    this._init(info);
-}
-
-CheckList.prototype = {
-    __proto__: NoteBase.prototype,
-
-    _init: function(info) {
-        NoteBase.prototype._init.call(this, info);
+class CheckList extends NoteBase {
+    constructor(info) {
+        super(info);
 
         this.switching = false;
         this.items = [];
@@ -729,9 +779,13 @@ CheckList.prototype = {
         let removeCompleteMenuItem = new PopupMenu.PopupMenuItem(_("Remove completed items"));
         this.contentMenuSection.addMenuItem(removeCompleteMenuItem);
         removeCompleteMenuItem.connect("activate", Lang.bind(this, this.removeComplete));
-    },
 
-    addItem: function(itemInfo, insertAfter) {
+        let unselectAllMenuItem = new PopupMenu.PopupMenuItem(_("Unselect all items"));
+        this.contentMenuSection.addMenuItem(unselectAllMenuItem);
+        unselectAllMenuItem.connect("activate", Lang.bind(this, this.unselectAll));
+    }
+
+    addItem(itemInfo, insertAfter) {
         let item = new CheckListItem(itemInfo);
 
         this.itemBox.add_actor(item.actor);
@@ -749,26 +803,26 @@ CheckList.prototype = {
 
         this.emit("changed");
         return item;
-    },
+    }
 
-    newItem: function(insertAfter, text) {
+    newItem(insertAfter, text) {
         let info;
         if ( text ) info = { text: text, completed: false };
         let item = this.addItem(info, insertAfter);
 
         return item;
-    },
+    }
 
-    removeItem: function(item) {
+    removeItem(item) {
         if ( !item.actor ) return;
 
         let text = item.clutterText;
         if ( text.focusId ) text.disconnect(text.focusId);
         item.actor.destroy();
         this.items.splice(this.items.indexOf(item), 1);
-    },
+    }
 
-    removeComplete: function() {
+    removeComplete() {
         for ( let i = 0; i < this.items.length; ) {
             if ( this.items[i].completed ) this.removeItem(this.items[i]);
             else i++;
@@ -776,9 +830,16 @@ CheckList.prototype = {
 
         if ( this.items.length == 0 ) this.newItem();
         this.emit("changed");
-    },
+    }
 
-    getInfo: function() {
+    unselectAll() {
+        for ( let i = 0; i < this.items.length; i++ ) {
+            this.items[i].completed = false;
+        }
+        this.emit("changed");
+    }
+
+    getInfo() {
         let info = { x: this.actor.x, y: this.actor.y, height: this.actor.height, width: this.actor.width, theme: this.theme };
         if ( this.title ) info.title = this.title;
 
@@ -801,9 +862,11 @@ CheckList.prototype = {
         }
 
         return info;
-    },
+    }
 
-    onButtonRelease: function(actor, event) {
+    onButtonRelease(actor, event) {
+        noteBox.setChildOnTop(this);
+
         if ( event.get_button() == 3 ) return true;
 
         // clean up from onButtonPress
@@ -847,9 +910,9 @@ CheckList.prototype = {
         }
 
         return true;
-    },
+    }
 
-    onButtonPress: function(actor, event) {
+    onButtonPress(actor, event) {
         if ( event.get_button() == 3 ) {
             this.toggleMenu();
             return true;
@@ -865,9 +928,9 @@ CheckList.prototype = {
         }
 
         return false;
-    },
+    }
 
-    canSelect: function(x, y) {
+    canSelect(x, y) {
         let firstItem = this.items[0];
         if ( y < this.scrollBox.get_transformed_position()[1] ||
              x > this.itemBox.get_transformed_position()[0] + this.itemBox.width ) return false;
@@ -881,9 +944,9 @@ CheckList.prototype = {
         if ( y > (lastItem.entry.get_transformed_position()[1] + lastItem.entry.height) ) return true;
 
         return false;
-    },
+    }
 
-    handleKeyPress: function(actor, event) {
+    handleKeyPress(actor, event) {
         let item = actor._delegate;
         let index = this.items.indexOf(item);
         let keyCode = event.get_key_symbol();
@@ -976,21 +1039,21 @@ CheckList.prototype = {
             this.idleId = Mainloop.idle_add(Lang.bind(this, this.updateScrollPosition));
         if ( changed ) this.triggerUpdate();
         return blockEvent;
-    },
+    }
 
-    onFocusIn: function(actor) {
+    onFocusIn(actor) {
         if ( !this.idleId )
             this.idleId = Mainloop.idle_add(Lang.bind(this, this.updateScrollPosition));
         if ( !actor.focusId ) actor.focusId = actor.connect("key-focus-out", Lang.bind(this, this.onFocusOut));
-    },
+    }
 
-    onFocusOut: function(actor) {
+    onFocusOut(actor) {
         if ( actor.text.length == 0 && this.items.length > 1 ) this.removeItem(actor._delegate);
         actor.disconnect(actor.focusId);
         actor.focusId = null;
-    },
+    }
 
-    updateScrollPosition: function() {
+    updateScrollPosition() {
         this.idleId = null;
 
         let focusedItem;
@@ -1009,9 +1072,9 @@ CheckList.prototype = {
 
         if ( actorStart < adjustment.value ) adjustment.set_value(actorStart);
         else if ( actorEnd > adjustment.value + scrollHeight ) adjustment.set_value(actorEnd - scrollHeight);
-    },
+    }
 
-    copy: function() {
+    copy() {
         let text = "";
         for ( let item of this.items ) {
             let selectedText = item.clutterText.get_selection();
@@ -1025,9 +1088,9 @@ CheckList.prototype = {
         }
 
         St.Clipboard.get_default().set_text(text);
-    },
+    }
 
-    paste: function() {
+    paste() {
         St.Clipboard.get_default().get_text(Lang.bind(this, function(cb, text) {
             if ( this.items.slice(-1).text == "" ) this.items.pop();
             let list = text.split("\n");
@@ -1037,21 +1100,16 @@ CheckList.prototype = {
             }
             this.emit("changed");
         }));
-    },
+    }
 
-    switchType: function() {
+    switchType() {
         this.switching = true;
         this.emit("changed", true);
     }
 }
 
-
-function CheckListItem(info) {
-    this._init(info);
-}
-
-CheckListItem.prototype = {
-    _init: function(info) {
+class CheckListItem {
+    constructor(info) {
         this.actor = new Cinnamon.GenericContainer();
         this.actor._delegate = this;
 
@@ -1078,14 +1136,14 @@ CheckListItem.prototype = {
 
         this.checkBox.actor.connect("clicked", Lang.bind(this, this.updateCheckedState));
         this.updateCheckedState();
-    },
+    }
 
-    updateCheckedState: function() {
+    updateCheckedState() {
         if ( this.checkBox.actor.checked ) this.entry.add_style_pseudo_class("checked");
         else this.entry.remove_style_pseudo_class("checked");
-    },
+    }
 
-    allocate: function(actor, box, flags) {
+    allocate(actor, box, flags) {
         let height = box.y2 - box.y1;
 
         let cbBox = new Clutter.ActorBox();
@@ -1118,41 +1176,41 @@ CheckListItem.prototype = {
 
         this.checkBox.actor.allocate(cbBox, flags);
         this.entry.allocate(eBox, flags);
-    },
+    }
 
-    getPreferedHeight: function(actor, forWidth, alloc) {
+    getPreferedHeight(actor, forWidth, alloc) {
         let checkBoxWidth = this.checkBox.actor.get_preferred_width(0)[1];
         let [entryMin, entryNat] = this.entry.get_preferred_height(forWidth - checkBoxWidth);
         let [checkBoxMin, checkBoxNat] = this.checkBox.actor.get_preferred_height(forWidth);
 
         alloc.min_size = Math.max(checkBoxMin, entryMin);
         alloc.natural_size = Math.max(checkBoxNat, entryNat);
-    },
+    }
 
-    getPreferedWidth: function(actor, forHeight, alloc) {
+    getPreferedWidth(actor, forHeight, alloc) {
         let [checkBoxMin, checkBoxNat] = this.checkBox.actor.get_preferred_width(0);
         let [entryMin, entryNat] = this.entry.get_preferred_width(0);
 
         alloc.min_size = checkBoxMin + entryMin;
         alloc.natural_size = checkBoxNat + entryNat;
-    },
+    }
 
     get completed() {
         return this.checkBox.actor.checked;
-    },
+    }
+
+    set completed(checked) {
+        this.checkBox.actor.checked = checked;
+        this.updateCheckedState();
+    }
 
     get text() {
         return this.entry.text;
     }
 }
 
-
-function NoteBox(menu) {
-    this._init(menu);
-}
-
-NoteBox.prototype = {
-    _init: function(menu) {
+class NoteBox {
+    constructor(menu) {
         this.menu = menu;
         this.notes = [];
         this.last_x = -1;
@@ -1160,42 +1218,40 @@ NoteBox.prototype = {
         this.mouseTrackEnabled = false;
         this.isModal = false;
         this.stageEventIds = [];
+        this.mouseTrackTimoutId = -1;
 
-        settings.bindWithObject(this, "storedNotes", "storedNotes");
-        settings.bindWithObject(this, "raisedState", "raisedState");
-        settings.bindWithObject(this, "hideState", "hideState");
-        settings.bindWithObject(this, "startState", "startState");
-
-        this.actor = new Clutter.Group();
+        this.actor = new Clutter.Actor();
         Main.uiGroup.add_actor(this.actor);
         this.actor._delegate = this;
 
         this.actor.add_actor(menu.actor);
         this.menuManager = new PopupMenu.PopupMenuManager(this);
 
-        if ( this.startState == 2 || ( this.startState == 3 && this.hideState ) ) {
+        let startState = settings.getValue("startState");
+        startState = ( startState >= 0 ) ? startState : settings.displayState;
+
+        if ( startState == DisplayState.HIDDEN ) {
             this.hideNotes();
-            this.actor.hide();
-            this.hideState = true;
+        }
+        else if ( startState == DisplayState.RAISED ) {
+            this.raiseNotes();
         }
         else {
-            if ( this.startState == 0 ) this.hideState = false;
-            if ( this.startState == 1 || ( this.startState == 3 && this.raisedState ) ) this.raiseNotes();
-            else this.lowerNotes();
+            this.lowerNotes();
         }
 
         this.dragPlaceholder = new St.Bin({ style_class: "desklet-drag-placeholder" });
         this.dragPlaceholder.hide();
 
         this.initializeNotes();
-    },
+    }
 
-    destroy: function() {
+    destroy() {
         this.actor.destroy();
         this.dragPlaceholder.destroy();
-    },
+    }
 
-    addNote: function(type, info) {
+    addNote(type, info) {
         let note;
         switch ( type ) {
             case "note":
@@ -1209,7 +1265,7 @@ NoteBox.prototype = {
         }
 
         let x, y;
-        if ( info ) {
+        if ( info && info.x && info.y ) {
             x = info.x;
             y = info.y;
         }
@@ -1231,23 +1287,23 @@ NoteBox.prototype = {
         else note.untrackMouse();
 
         return note;
-    },
+    }
 
-    newNote: function() {
+    newNote() {
         let note = this.addNote("note", null);
         this.update();
         this.raiseNotes();
         focusText(note.textBox);
-    },
+    }
 
-    newCheckList: function() {
+    newCheckList() {
         let note = this.addNote("checklist", null);
         this.update();
         this.raiseNotes();
         focusText(note.items[0].entry)
-    },
+    }
 
-    removeNote: function(note) {
+    removeNote(note) {
         for ( let i = 0; i < this.notes.length; i++ ) {
             if ( this.notes[i] == note ) {
                 this.notes[i].destroy();
@@ -1255,37 +1311,45 @@ NoteBox.prototype = {
                 break;
             }
         }
-        if ( this.notes.length == 0 && this.raisedState ) {
+        if ( this.notes.length == 0 && settings.displayState == DisplayState.RAISED ) {
             this.lowerNotes();
         }
         this.update();
-    },
+    }
 
-    removeAll: function() {
+    removeAll() {
         for ( let note of this.notes ) note.destroy();
         this.notes = [];
-    },
+    }
 
-    update: function(item, refresh) {
+    setChildOnTop(child) {
+        this.actor.set_child_above_sibling(child.actor, null);
+        let i = this.notes.indexOf(child);
+        this.notes.splice(i, 1);
+        this.notes.push(child);
+        this.update();
+    }
+
+    update(item, refresh) {
         let notesData = [];
         for ( let i = 0; i < this.notes.length; i++ )
             notesData.push(this.notes[i].getInfo());
-        this.storedNotes = notesData;
+        settings.setValue("storedNotes", notesData);
         if ( refresh ) this.initializeNotes();
-    },
+    }
 
-    initializeNotes: function() {
+    initializeNotes() {
         this.removeAll();
-        for ( let noteInfo of this.storedNotes ) {
+        for ( let noteInfo of settings.getValue("storedNotes") ) {
             let type;
             //make sure it doesn't break anything on upgrade from older version
             if ( !noteInfo.type ) type = "note";
             else type = noteInfo.type;
             this.addNote(type, noteInfo);
         }
-    },
+    }
 
-    hasActor: function(actor) {
+    hasActor(actor) {
         // listen to contents of the box
         if ( this.actor.contains(actor) ) return true;
 
@@ -1298,47 +1362,38 @@ NoteBox.prototype = {
         }
 
         return false;
-    },
+    }
 
-    raiseNotes: function() {
+    raiseNotes() {
         this.unpinNotes();
         this.menu.open();
         this.actor.raise_top();
-        if ( this.hideState ) {
-            this.actor.show();
-            this.hideState = false;
-        }
-
-        this.raisedState = true;
-        this.enableMouseTracking(false);
+        this.actor.show();
+        settings.displayState = DisplayState.RAISED;
+        this.disableMouseTrackingCheck(true);
         this.setModal();
-    },
+    }
 
-    lowerNotes: function() {
+    lowerNotes() {
         this.unpinNotes();
         this.menu.close();
         this.actor.lower(global.window_group);
-        if ( this.hideState ) {
-            this.actor.show();
-            this.hideState = false;
-        }
-
-        this.raisedState = false;
+        this.actor.show();
+        settings.displayState = DisplayState.DESKTOP;
         this.unsetModal();
-        this.enableMouseTracking(true);
-    },
+        this.enableMouseTrackingCheck();
+    }
 
-    hideNotes: function() {
+    hideNotes() {
         this.unpinNotes();
         this.menu.close();
         this.actor.hide();
-        this.raisedState = false;
-        this.hideState = true;
+        settings.displayState = DisplayState.HIDDEN;
         this.unsetModal();
-        this.enableMouseTracking(false);
-    },
+        this.disableMouseTrackingCheck(false);
+    }
 
-    pinNotes: function() {
+    pinNotes() {
         if ( this.pinned ) return;
 
         if ( this.menu.isOpen ) this.menu.close();
@@ -1347,13 +1402,14 @@ NoteBox.prototype = {
         // with it's own menu manager
         this.menuManager.addMenu(this.menu);
 
+        settings.displayState = DisplayState.PINNED;
         this.unsetModal();
-        this.enableMouseTracking(true);
+        this.disableMouseTrackingCheck(true);
         this.pinned = true;
         this.emit("pin-changed");
-    },
+    }
 
-    unpinNotes: function() {
+    unpinNotes() {
         if ( !this.pinned ) return;
 
         // if we've pinned the notes, the menu is managed by it's own manager so we need to remove it now
@@ -1362,9 +1418,9 @@ NoteBox.prototype = {
 
         this.pinned = false;
         this.emit("pin-changed");
-    },
+    }
 
-    setModal: function() {
+    setModal() {
         if ( this.isModal ) return;
 
         this.stageEventIds.push(global.stage.connect("captured-event", Lang.bind(this, this.handleStageEvent)));
@@ -1372,18 +1428,18 @@ NoteBox.prototype = {
         this.stageEventIds.push(global.stage.connect("leave-event", Lang.bind(this, this.handleStageEvent)));
 
         if ( Main.pushModal(this.actor) ) this.isModal = true;
-    },
+    }
 
-    unsetModal: function() {
+    unsetModal() {
         if ( !this.isModal ) return;
 
         for ( let i = 0; i < this.stageEventIds.length; i++ ) global.stage.disconnect(this.stageEventIds[i]);
         this.stageEventIds = [];
         Main.popModal(this.actor);
         this.isModal = false;
-    },
+    }
 
-    handleStageEvent: function(actor, event) {
+    handleStageEvent(actor, event) {
         if ( this.pinned ) return false;
 
         let target = event.get_source();
@@ -1398,9 +1454,9 @@ NoteBox.prototype = {
         }
 
         return false;
-    },
+    }
 
-    handleDragOver: function(source, actor, x, y, time) {
+    handleDragOver(source, actor, x, y, time) {
         if ( !this.dragPlaceholder.get_parent() ) Main.uiGroup.add_actor(this.dragPlaceholder);
 
         this.dragPlaceholder.show();
@@ -1453,9 +1509,9 @@ NoteBox.prototype = {
         this.last_x = x;
         this.last_y = y;
         return DND.DragMotionResult.MOVE_DROP;
-    },
+    }
 
-    acceptDrop: function(source, actor, x, y, time) {
+    acceptDrop(source, actor, x, y, time) {
         if ( !(source instanceof NoteBase) ) return false;
 
         Main.uiGroup.remove_actor(actor);
@@ -1471,9 +1527,9 @@ NoteBox.prototype = {
         this.update();
 
         return true;
-    },
+    }
 
-    cancelDrag: function(source, actor) {
+    cancelDrag(source, actor) {
         if ( !(source instanceof NoteBase) ) return false;
 
         Main.uiGroup.remove_actor(actor);
@@ -1488,46 +1544,69 @@ NoteBox.prototype = {
         this.last_y = -1;
 
         return true;
-    },
+    }
 
-    checkMouseTracking: function() {
-        let enable = false;
-        if ( this.pinned ) enable = true;
-        else if ( !this.hideState && !this.raisedState ) {
-            let window = global.screen.get_mouse_window(null);
-            let hasMouseWindow = window && window.window_type != Meta.WindowType.DESKTOP;
-            enable = !hasMouseWindow;
-        }
+    checkMouseTracking() {
+        let window = global.screen.get_mouse_window(null);
+        let windowHasMouse = window && window.window_type != Meta.WindowType.DESKTOP;
 
-        if ( enable ) for ( let i = 0; i < this.notes.length; i++ ) this.notes[i].trackMouse();
+        if ( !windowHasMouse ) for ( let i = 0; i < this.notes.length; i++ ) this.notes[i].trackMouse();
         else for ( let i = 0; i < this.notes.length; i++ ) this.notes[i].untrackMouse();
 
         return true;
-    },
+    }
 
-    enableMouseTracking: function(enable) {
-        if( enable && !this.mouseTrackTimoutId )
+    enableMouseTrackingCheck() {
+        if ( this.mouseTrackTimoutId < 0 ) {
             this.mouseTrackTimoutId = Mainloop.timeout_add(500, Lang.bind(this, this.checkMouseTracking));
-        else if ( !enable && this.mouseTrackTimoutId ) {
-            Mainloop.source_remove(this.mouseTrackTimoutId);
-            this.mouseTrackTimoutId = null;
-            for ( let i = 0; i < this.notes.length; i++ ) {
-                this.notes[i].untrackMouse();
-            }
         }
 
         this.checkMouseTracking();
-    },
+    }
 
-    getAvailableCoordinates: function() {
+    disableMouseTrackingCheck(track) {
+        if ( this.mouseTrackTimoutId > 0 ) {
+            Mainloop.source_remove(this.mouseTrackTimoutId);
+            this.mouseTrackTimoutId = -1;
+        }
+
+        for ( let i = 0; i < this.notes.length; i++ ) {
+            if ( track ) {
+                this.notes[i].trackMouse();
+            }
+            else {
+                this.notes[i].untrackMouse();
+            }
+        }
+    }
+
+    getAvailableCoordinates() {
         //determine boundaries
         let monitor = Main.layoutManager.primaryMonitor;
+        let panels = Main.panelManager.getPanelsInMonitor(Main.layoutManager.primaryIndex);
+
         let startX = PADDING + monitor.x;
         let startY = PADDING + monitor.y;
-        if ( Main.desktop_layout != Main.LAYOUT_TRADITIONAL ) startY += Main.panel.actor.height;
-        let width = monitor.width - PADDING;
-        let height = monitor.height - Main.panel.actor.height - PADDING;
-        if ( Main.desktop_layout == Main.LAYOUT_CLASSIC ) height -= Main.panel2.actor.height;
+        let width = monitor.width - (PADDING * 2);
+        let height = monitor.height - (PADDING * 2);
+
+        for ( let i = 0; i < panels.length; i++ ) {
+            let panel = panels[i];
+            // if ( panel.monitorIndex != Main.layoutManager.primaryIndex ) continue;
+            if ( panel.panelPosition == Panel.PanelLoc.top ) {
+                startY += panel.actor.height;
+            }
+            else if ( panel.panelPosition == Panel.PanelLoc.left ) {
+                startX += panel.actor.width;
+            }
+
+            if ( panel.is_vertical ) {
+                width -= panel.actor.width;
+            }
+            else {
+                height -= panel.actor.height;
+            }
+        }
 
         //calculate number of squares
         let rowHeight = settings.getValue("height") + PADDING;
@@ -1564,29 +1643,21 @@ NoteBox.prototype = {
 }
 Signals.addSignalMethods(NoteBox.prototype);
 
+class MyApplet extends Applet.IconApplet {
+    constructor(metadata, orientation, panelHeight, instanceId) {
+        super(orientation, panelHeight, instanceId);
 
-function MyApplet(metadata, orientation, panelHeight, instanceId) {
-    this._init(metadata, orientation, panelHeight, instanceId);
-}
-
-MyApplet.prototype = {
-    __proto__: Applet.IconApplet.prototype,
-
-    _init: function(metadata, orientation, panelHeight, instanceId) {
         applet = this;
         this.metadata = metadata;
         this.instanceId = instanceId;
         this.orientation = orientation;
         uuid = metadata.uuid
 
-        Applet.IconApplet.prototype._init.call(this, this.orientation, panelHeight, instanceId);
-
-        // l10n/translation
         Gettext.bindtextdomain(uuid, GLib.get_home_dir() + "/.local/share/locale");
 
         settings = new Settings.AppletSettings(this, uuid, instanceId);
-        settings.bind("storedNotes", "storedNotes");
-        settings.bind("raisedState", "raisedState");
+        settings.bindWithObject(settings, "displayState", "displayState");
+        settings.bind("templates", "templates");
 
         this.set_applet_icon_symbolic_path(this.metadata.path+"/icons/sticky-symbolic.svg");
 
@@ -1596,20 +1667,29 @@ MyApplet.prototype = {
         noteBox.connect("pin-changed", Lang.bind(this, this.stateChanged));
 
         this.buildMenus();
-    },
+        this.buildTemplateMenu();
+    }
 
-    on_applet_clicked: function() {
-        if ( noteBox.pinned ) this.menu.toggle();
-        else if ( this.raisedState ) noteBox.lowerNotes();
-        else noteBox.raiseNotes();
-    },
+    on_applet_clicked() {
+        if ( settings.displayState == DisplayState.PINNED ) {
+            this.menu.toggle();
+        }
+        else if ( settings.displayState == DisplayState.RAISED ) {
+            noteBox.lowerNotes();
+        }
+        else {
+            noteBox.raiseNotes();
+        }
+    }
 
-    on_applet_removed_from_panel: function() {
-        if ( this.raisedState ) noteBox.lowerNotes();
+    on_applet_removed_from_panel() {
+        if ( settings.displayState == DisplayState.RAISED || settings.displayState == DisplayState.PINNED ) {
+            noteBox.lowerNotes();
+        }
         noteBox.destroy();
-    },
+    }
 
-    buildMenus: function() {
+    buildMenus() {
         // main menu
         let newNoteMenuItem = new PopupMenu.PopupIconMenuItem(_("New note"), "add-note-symbolic", St.IconType.SYMBOLIC);
         this.menu.addMenuItem(newNoteMenuItem);
@@ -1618,6 +1698,10 @@ MyApplet.prototype = {
         let newCheckListMenuItem = new PopupMenu.PopupIconMenuItem(_("New check-list"), "add-checklist-symbolic", St.IconType.SYMBOLIC);
         this.menu.addMenuItem(newCheckListMenuItem);
         newCheckListMenuItem.connect("activate", Lang.bind(noteBox, noteBox.newCheckList));
+
+        this.templateMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("New from template"));
+        this.menu.addMenuItem(this.templateMenuItem);
+        this.templateMenu = this.templateMenuItem.menu;
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -1640,30 +1724,54 @@ MyApplet.prototype = {
         let restoreBackupItem = new PopupMenu.PopupMenuItem(_("Restore from backup"));
         this._applet_context_menu.addMenuItem(restoreBackupItem);
         restoreBackupItem.connect("activate", Lang.bind(this, this.loadBackup));
-    },
+    }
 
-    stateChanged: function() {
+    buildTemplateMenu() {
+        if ( this.templates.length == 0 ) {
+            this.templateMenuItem.actor.hide();
+            return;
+        }
+        else {
+            this.templateMenuItem.actor.show();
+        }
+
+        for ( let i = 0; i < this.templates.length; i++ ) {
+            let info = this.templates[i];
+            let menuItem = new PopupMenu.PopupMenuItem(info.name);
+            menuItem.templateInfo = info;
+            this.templateMenu.addMenuItem(menuItem);
+            menuItem.connect("activate", Lang.bind(this, this.newFromTemplate));
+        }
+    }
+
+    newFromTemplate(menuItem) {
+        let info = menuItem.templateInfo;
+        noteBox.addNote(info.type, info);
+        noteBox.update();
+    }
+
+    stateChanged() {
         if ( noteBox.pinned ) this.pinMenuItem.label.text = "Unpin notes (lower on click)";
         else this.pinMenuItem.label.text = "Pin notes (keep on top)";
-    },
+    }
 
-    backupNotes: function() {
-        params = { directory: "~/", name: "notes-" + new Date().toJSON() + " .json" };
+    backupNotes() {
+        let params = { directory: "~/", name: "notes-" + new Date().toJSON() + " .json" };
         FileDialog.save(Lang.bind(this, function(path) {
             let file = Gio.file_new_for_path(path.slice(0,-1));
             if ( !file.query_exists(null) ) file.create(Gio.FileCreateFlags.NONE, null);
-            file.replace_contents(JSON.stringify(this.storedNotes), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+            file.replace_contents(JSON.stringify(settings.getValue("storedNotes")), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
         }), params);
-    },
+    }
 
-    loadBackup: function() {
-        params = { directory: "~/" };
+    loadBackup() {
+        let params = { directory: "~/" };
         new ModalDialog.ConfirmDialog(_("This will permanently remove all existing notes. Are you sure you want to continue?"), Lang.bind(this, function() {
             FileDialog.open(Lang.bind(this, function(path) {
                 let file = Gio.file_new_for_path(path.slice(0,-1));
                 if ( !file.query_exists(null) ) return;
                 let [a, contents, b] = file.load_contents(null);
-                this.storedNotes = JSON.parse(contents);
+                settings.setValue("storedNotes", JSON.parse(contents));
                 noteBox.initializeNotes();
             }), params);
         })).open();

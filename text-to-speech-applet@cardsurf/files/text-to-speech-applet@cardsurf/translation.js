@@ -4,8 +4,13 @@ const Gio = imports.gi.Gio;
 const Gettext = imports.gettext;
 
 const uuid = 'text-to-speech-applet@cardsurf';
-const AppletDirectory = imports.ui.appletManager.applets[uuid];
-const ShellUtils = AppletDirectory.shellUtils;
+let ShellUtils;
+if (typeof require !== 'undefined') {
+    ShellUtils = require('./shellUtils');
+} else {
+    const AppletDirectory = imports.ui.appletManager.applets[uuid];
+    ShellUtils = AppletDirectory.shellUtils;
+}
 
 
 
@@ -51,7 +56,7 @@ Translator.prototype = {
     _generate_mo_files: function(script_path) {
         let process = new ShellUtils.ShellOutputProcess([script_path]);
         let output = process.spawn_sync_and_get_output();
-        return outpu
+        return output;
     },
 
 };

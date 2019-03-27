@@ -10,9 +10,15 @@ const Cairo = imports.cairo;
 const Gettext = imports.gettext;
 
 const uuid = 'download-and-upload-speed@cardsurf';
-const AppletDirectory = imports.ui.appletManager.applets[uuid];
-const AppletConstants = AppletDirectory.appletConstants;
-const CssStylization = AppletDirectory.cssStylization;
+let AppletConstants, CssStylization;
+if (typeof require !== 'undefined') {
+    AppletConstants = require('./appletConstants');
+    CssStylization = require('./cssStylization');
+} else {
+    const AppletDirectory = imports.ui.appletManager.applets[uuid];
+    AppletConstants = AppletDirectory.appletConstants;
+    CssStylization = AppletDirectory.cssStylization;
+}
 
 function _(str) {
     return Gettext.dgettext(uuid, str);
@@ -92,6 +98,7 @@ GuiSpeed.prototype = {
         this.panel_height = panel_height;
         this.gui_speed_type = gui_speed_type;
         this.decimal_places = decimal_places;
+        this.text_spacing = 5;
 
         this.actor = new St.BoxLayout();
         this.iconlabel_received = new IconLabel();
@@ -166,8 +173,11 @@ GuiSpeed.prototype = {
     },
 
     _calculate_font_size: function() {
-        return this.gui_speed_type == AppletConstants.GuiSpeedType.COMPACT ?
-               (this.panel_height * 0.5) - 5 : (this.panel_height * 0.6) - 5;
+         let size = this.gui_speed_type == AppletConstants.GuiSpeedType.COMPACT ?
+                    this.panel_height * 0.5 : this.panel_height * 0.6;
+         size /= global.ui_scale;
+         size -= this.text_spacing;
+         return size;
     },
 
     _resize_gui_elements_to_match_text: function(css_style) {
@@ -258,10 +268,10 @@ RadioMenuItem.prototype = {
         this.active_option_index = -1;
         this.callback_object = null;
         this.callback_option_clicked = null;
-        this._init_options(option_names);
+        this._add_options(option_names);
     },
 
-    _init_options: function(option_names) {
+    _add_options: function(option_names) {
         for(let option_name of option_names) {
              let option = new PopupMenu.PopupMenuItem(option_name, false);
              option.connect('activate', Lang.bind(this, this._on_option_clicked));
@@ -274,6 +284,17 @@ RadioMenuItem.prototype = {
         let index_clicked = this.options.indexOf(option);
         this.set_active_option(index_clicked);
         this._invoke_callback_option_clicked();
+    },
+
+    reload_options: function(option_names) {
+        this._remove_options();
+        this._add_options(option_names);
+    },
+
+    _remove_options: function() {
+         this.menu.removeAll()
+         this.options = [];
+         this.active_option_index = -1;
     },
 
     set_active_option: function(index) {
@@ -322,6 +343,77 @@ RadioMenuItem.prototype = {
     },
 };
 
+
+
+
+
+
+
+
+function CheckboxMenuItem( title) {
+    this._init(title);
+};
+
+CheckboxMenuItem.prototype = {
+    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
+
+    _init: function(title) {
+        PopupMenu.PopupSubMenuMenuItem.prototype._init.call(this, title, false);
+
+        this.options = [];
+        this.callback_object = null;
+        this.callback_option_toggled = null;
+    },
+
+    reload_options: function(option_names, options_checked) {
+        this.remove_options();
+        this.create_options(option_names, options_checked);
+        this.add_options(option_names);
+    },
+
+    remove_options: function() {
+         this.menu.removeAll()
+         this.options = [];
+    },
+
+    create_options: function(option_names, options_checked) {
+        for(let i = 0; i < option_names.length; ++i) {
+             let option_name = option_names[i];
+             let option_checked = options_checked[i];
+             let option = new PopupMenu.PopupSwitchMenuItem(option_name, option_checked);
+             option.connect('toggled', Lang.bind(this, this._on_option_toggled));
+             this.options.push(option);
+        }
+    },
+
+    _on_option_toggled: function (option, checked) {
+        this._invoke_callback_option_toggled(option, checked);
+    },
+
+    _invoke_callback_option_toggled: function(option, checked) {
+        if(this.callback_option_toggled != null) {
+            let option_index = this.options.indexOf(option);
+            let option_name = this.get_option_name(option);
+            this.callback_option_toggled.call(this.callback_object, option_index, option_name, checked);
+        }
+    },
+
+    get_option_name: function(option) {
+        return option.label.get_text();
+    },
+
+    add_options: function(option_names) {
+        for(let option of this.options) {
+            this.menu.addMenuItem(option);
+        }
+    },
+
+    set_callback_option_toggled: function(callback_object, callback_option_toggled) {
+        this.callback_object = callback_object;
+        this.callback_option_toggled = callback_option_toggled;
+    },
+
+};
 
 
 
@@ -380,8 +472,8 @@ HoverMenuTotalBytes.prototype={
 
     _append_semicolon: function(css_style){
         css_style = css_style.trim();
-        last_char = css_style.slice(-1);
-        semicolon = ';';
+        let last_char = css_style.slice(-1);
+        let semicolon = ';';
         if (last_char != semicolon) {
             css_style += semicolon;
         }

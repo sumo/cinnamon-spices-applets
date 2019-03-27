@@ -1,13 +1,13 @@
 /* This is a basic Battery  Applet with Monitoring and Shutdown (BAMS)
 It is not only useful in its own right
 but is also provides a 'tutorial' framework for other more
-complex applets - for example it provides a settings screen 
-and a 'standard' right click (context) menu which opens 
+complex applets - for example it provides a settings screen
+and a 'standard' right click (context) menu which opens
 the settings panel and a Housekeeping submenu accessing
 help and a version/update files and also the nVidia settings program,
 the gnome system monitor program and the Power monitor
-in case you want to find out how much resources this applet is 
-using at various update rates. 
+in case you want to find out how much resources this applet is
+using at various update rates.
 Items with a ++ in the comment are useful for re-use
 */
 const Applet = imports.ui.applet; // ++
@@ -18,44 +18,19 @@ const Lang = imports.lang; //  ++ Needed for menus
 const GLib = imports.gi.GLib; // ++ Needed for starting programs and translations
 const Mainloop = imports.mainloop; // Needed for timer update loop
 const ModalDialog = imports.ui.modalDialog; // Needed for Modal Dialog used in Alert
+const Gettext = imports.gettext; // ++ Needed for translations
+const Main = imports.ui.main; // ++ Needed for criticalNotify()
 
-// l10n/translation support as per NikoKrause tutorial modified as UUID already used!
-const Gettext = imports.gettext
-const UUIDl10n = "batterymonitor@pdcurtis"
-Gettext.bindtextdomain(UUIDl10n, GLib.get_home_dir() + "/.local/share/locale")
+// ++ Always needed if you want localisation/translation support
+// New l10n support thanks to ideas from @Odyseus, @lestcape and @NikoKrause
 
+var UUID;
 function _(str) {
-  return Gettext.dgettext(UUIDl10n, str);
+     let customTrans = Gettext.dgettext(UUID, str);
+     if (customTrans !== str && customTrans !== "")
+        return customTrans;
+    return Gettext.gettext(str);
 }
-
-
-/* 
-Function to provide a Modal Dialog. This approach is thanks to Mark Bolin
-It works, even if I do not fully understand it, and has done for years in NUMA! 
-*/
-
-function AlertDialog(value) {
-    this._init(value);
-};
-
-AlertDialog.prototype = {
-    __proto__: ModalDialog.ModalDialog.prototype,
-    _init: function (value) {
-        ModalDialog.ModalDialog.prototype._init.call(this);
-        let label = new St.Label({
-            text: value ,
-            style_class: "centered"
-        });
-        this.contentLayout.add(label);
-        this.setButtons([{
-            style_class: "centered",
-            label: _("Ok"),
-            action: Lang.bind(this, function () {
-                this.close();
-            })
-        }]);
-    }
-};
 
 
 
@@ -66,13 +41,16 @@ function MyApplet(metadata, orientation, panelHeight, instance_id) {
 
 // ++ Always needed
 MyApplet.prototype = {
-    __proto__: Applet.Applet.prototype, // Text Applet
+    __proto__: Applet.TextIconApplet.prototype, // Now TextIcon Applet
 
-    _init: function(metadata, orientation, panelHeight, instance_id) {
-        Applet.TextApplet.prototype._init.call(this, orientation, panelHeight, instance_id);
+    _init: function (metadata, orientation, panelHeight, instance_id) {
+        Applet.TextIconApplet.prototype._init.call(this, orientation, panelHeight, instance_id);
         try {
             this.settings = new Settings.AppletSettings(this, metadata.uuid, instance_id); // ++ Picks up UUID from metadata for Settings
 
+            if (this.versionCompare( GLib.getenv('CINNAMON_VERSION') ,"3.2" ) >= 0 ){
+                 this.setAllowedLayout(Applet.AllowedLayout.BOTH);
+            }
             this.settings.bindProperty(Settings.BindingDirection.IN, // Setting type
                 "refreshInterval-spinner", // The setting key
                 "refreshInterval", // The property to manage (this.refreshInterval)
@@ -85,20 +63,47 @@ MyApplet.prototype = {
                 this.on_settings_changed,
                 null);
 
+            this.settings.bindProperty(Settings.BindingDirection.IN,
+                "displayType",
+                "displayType",
+                this.on_settings_changed,
+                null);
+
             // ++ Make metadata values available within applet for context menu.
-            this.cssfile = metadata.path + "/stylesheet.css"; 
+
+            this.appletPath = metadata.path;
+            this.cssfile = metadata.path + "/stylesheet.css"; // No longer required
             this.changelog = metadata.path + "/CHANGELOG.md";
             this.helpfile = metadata.path + "/README.md";
+            this.batteryscript = metadata.path + "/batteryscript.sh";
+            this.battery100 = metadata.path + "/icons/battery-100.png";
+            this.battery080 = metadata.path + "/icons/battery-080.png";
+            this.battery060 = metadata.path + "/icons/battery-060.png";
+            this.battery040 = metadata.path + "/icons/battery-040.png";
+            this.batteryCaution = metadata.path + "/icons/battery-caution.png";
+            this.batteryLow = metadata.path + "/icons/battery-low.png";
+            this.batteryCharging100 = metadata.path + "/icons/battery-charging.png";
+            this.batteryCharging080 = metadata.path + "/icons/battery-charging-080.png";
+            this.batteryCharging060 = metadata.path + "/icons/battery-charging-060.png";
+            this.batteryCharging040 = metadata.path + "/icons/battery-charging-040.png";
+            this.batteryChargingCaution = metadata.path + "/icons/battery-charging-caution.png";
+            this.batteryChargingLow = metadata.path + "/icons/battery-charging-low.png";
 
-            this.batterytempscript = metadata.path + "/batterytempscript.sh";
-            this.appletPath = metadata.path;
-            this.UUID = metadata.uuid;
+            // Set initial value
+            this.set_applet_icon_path(this.batteryCharging100)
+
+            // ++ Part of new l10n support
+            UUID = metadata.uuid;
+            Gettext.bindtextdomain(metadata.uuid, GLib.get_home_dir() + "/.local/share/locale");
+
             this.nvidiagputemp = 0;
-            this.flashFlag = true; // flag for flashing background 
-            this.flashFlag2 = true; // flag for second flashing background 
+            this.flashFlag = true; // flag for flashing background
+            this.flashFlag2 = true; // flag for second flashing background
             this.lastBatteryPercentage = 50; // Initialise lastBatteryPercentage
-            this.batteryStateOld = _("invalid")
+            this.batteryStateOld = "invalid"
             this.alertFlag = false; // Flag says alert has been tripped to avoid repeat notifications
+
+            this.on_orientation_changed(orientation); // Initialise for panel orientation
 
             this.applet_running = true; //** New to allow applet to be fully stopped when removed from panel
 
@@ -106,30 +111,43 @@ MyApplet.prototype = {
             if (this.versionCompare(GLib.getenv('CINNAMON_VERSION'), "3.0") <= 0) {
                 this.textEd = "gedit";
             } else {
-                this.textEd = "xed";
+                this.textEd = "xdg-open";
             }
 
-            // Set up Modal Alert Box
- //          alertModalDataWarning = new AlertDialog("The Battery Level has fallen to your alert level\n\n either reconnect to a power source\n\or close down your work and suspend or shutdown the machine");
+            // Check that all Dependencies Met by presence of sox and zenity
+            if (GLib.find_program_in_path("sox") && GLib.find_program_in_path("zenity") ) {
+                 this.dependenciesMet = true;
+            } else {
+                 let icon = new St.Icon({ icon_name: 'error',
+                 icon_type: St.IconType.FULLCOLOR,
+                 icon_size: 36 });
+                 Main.criticalNotify(_("Some Dependencies not Installed"), _("Both 'sox' and 'zenity' are required for this applet to have all its facilities including notifications and audible alerts .\n\nPlease read the help file on how to install them."), icon);
+                 this.dependenciesMet = false;
+            }
+
+
+            // Set sound file locations
+            this.batteryLowSound = GLib.get_home_dir() + "/batterymonitorwarning.mp3"; // path to sound file in user's home folder
+            if (GLib.file_test(this.batteryLowSound, GLib.FileTest.EXISTS)) {
+                  Main.warningNotify(_("Battery Monitor Applet"), _("A User Defined Sound File has been Specified for low Battery\n\nPlease ensure the volume is set sensibly in public places\nespecially if a long loud file is specifed\n"));
+            } else {
+                  this.batteryLowSound = "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga" // path to default sound file
+            }
+
+            // Check stylesheet file over-ride location and use
+            this.ccsfilePersistent = GLib.get_home_dir() + "/" + UUID + "/stylesheet.css"; // path to stylesheet file placed in user's home folder.
+            if (GLib.file_test(this.ccsfilePersistent, GLib.FileTest.EXISTS)) {
+//                  Main.warningNotify(_("Battery Applet with Monitoring and Shutdown - Stylesheet persistence active"));
+                  //Over-ride code - currently a copy which needs an extra cinnamon restarts after any change
+                  GLib.spawn_command_line_async("cp  " + this.ccsfilePersistent + " " + metadata.path + "/stylesheet.css");
+            }
+
+
 
             // ++ Set up left click menu
             this.menuManager = new PopupMenu.PopupMenuManager(this);
             this.menu = new Applet.AppletPopupMenu(this, orientation);
             this.menuManager.addMenu(this.menu);
-
-            // ++ Add text actor to Applet
-            this.appletLabel = new St.Label({
-                reactive: true,
-                track_hover: true,
-                //           style_class: "spacer-applet"
-            });
-            this.actor.add(this.appletLabel, {
-                y_align: St.Align.MIDDLE,
-                y_fill: false
-            });
-
-            // ++ Set initial value of text
-            this.appletLabel.set_text(_("Wait"));
 
             // ++ Build Context (Right Click) Menu
             this.buildContextMenu();
@@ -141,12 +159,30 @@ MyApplet.prototype = {
             GLib.spawn_command_line_async('touch /tmp/.batteryState');
 
             // Finally setup to start the update loop for the applet display running
+
+            this.set_applet_label(_(""));
             this.set_applet_tooltip(_("Waiting"));
             this.on_settings_changed()   // This starts the MainLoop timer loop
 
         } catch (e) {
             global.logError(e);
         }
+    },
+
+
+    on_orientation_changed: function (orientation) {
+        this.orientation = orientation;
+        if (this.versionCompare( GLib.getenv('CINNAMON_VERSION') ,"3.2" ) >= 0 ){
+             if (this.orientation == St.Side.LEFT || this.orientation == St.Side.RIGHT) {
+                 // vertical
+                 this.isHorizontal = false;
+             } else {
+                 // horizontal
+                 this.isHorizontal = true;
+             }
+         } else {
+                this.isHorizontal = true;  // Do not check unless >= 3.2
+         }
     },
 
 
@@ -180,8 +216,7 @@ MyApplet.prototype = {
     on_generic_changed: function() {},
 
     on_slider_changed: function(slider, value) {
-        this.alertPercentage = (value * 30) + 10; // This is our BIDIRECTIONAL setting - by updating this.scale_val,
-        // Our configuration file will also be updated
+        this.alertPercentage = (value * 30) + 10; // This is our BIDIRECTIONAL setting - by updating our configuration file will also be updated
 
     },
 
@@ -233,7 +268,7 @@ MyApplet.prototype = {
         }
     },
 
-    //++ Build left click menu 
+    //++ Build left click menu
     makeMenu: function() {
         try {
             this.menu.removeAll();
@@ -243,7 +278,7 @@ MyApplet.prototype = {
             });
             this.menu.addMenuItem(this.menuitemHead1);
 
-            this.menuitemInfo2 = new PopupMenu.PopupMenuItem("     " + _("Note: Alerts not enabled in Settings"), {
+            this.menuitemInfo2 = new PopupMenu.PopupMenuItem("     " + _("Waiting for battery information"), {
                 reactive: false
             });
             this.menu.addMenuItem(this.menuitemInfo2);
@@ -257,7 +292,7 @@ MyApplet.prototype = {
         }
     },
 
-    //++ Handler for when the applet is clicked. 
+    //++ Handler for when the applet is clicked.
     on_applet_clicked: function(event) {
         this.updateLoop();
         this.menu.toggle();
@@ -269,21 +304,21 @@ MyApplet.prototype = {
         try {
             this.batteryPercentage = GLib.file_get_contents("/tmp/.batteryPercentage").toString();
             this.batteryPercentage = this.batteryPercentage.trim().substr(5);
-            this.batteryPercentage = Math.floor(this.batteryPercentage); 
+            this.batteryPercentage = Math.floor(this.batteryPercentage);
              // now check we have a genuine number otherwise use last value
-            if ( ! ( this.batteryPercentage > 0 && this.batteryPercentage <= 100 )) {             
+            if ( ! ( this.batteryPercentage > 0 && this.batteryPercentage <= 100 )) {
                 this.batteryPercentage = this.lastBatteryPercentage;
             }
 //          Comment out following line when tests are complete
-//          this.batteryPercentage = this.batteryPercentage / 5 ;   
+//          this.batteryPercentage = this.batteryPercentage / 5 ;
             this.batteryState = GLib.file_get_contents("/tmp/.batteryState").toString();
-            if ( this.batteryState.trim().length > 6 ) { 
+            if ( this.batteryState.trim().length > 6 ) {
                  this.batteryState = this.batteryState.trim().substr(5);
                  this.batteryStateOld = this.batteryState;
-            } else { 
+            } else {
                  this.batteryState =  this.batteryStateOld;
             }
- 
+
             this.batteryMessage = " "
             if (Math.floor(this.batteryPercentage)  >= Math.floor(this.alertPercentage)) {
                 this.actor.style_class = 'bam-normal';
@@ -292,7 +327,7 @@ MyApplet.prototype = {
                     }
                 this.alertFlag = false;
             }
-       
+
                if (Math.floor(this.batteryPercentage)  < Math.floor(this.alertPercentage)) {
                 if (this.flashFlag) {
                     this.actor.style_class = 'bam-alert';
@@ -302,24 +337,24 @@ MyApplet.prototype = {
                      this.actor.style_class = 'bam-alert-discharging';
                     this.flashFlag = true; // Corrected placement
                     }
-//                    this.flashFlag = true;
                 }
 
-                  
                 if (this.batteryState.indexOf("discharg") > -1) {
                     this.batteryMessage = _("Battery Low - turn off or connect to mains") + " ";
                     if ( !this.alertFlag) {
                        this.alertFlag = true;  // Reset above when out of warning range
-                       // Audible alert (added in v32_1.0.0)
-                       GLib.spawn_command_line_async('play "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"'); 
-                       alertModalDataWarning = new AlertDialog(_("The Battery Level has fallen to your alert level\n\n either reconnect to a power source\n\or close down your work and suspend or shutdown the machine"));
-                       alertModalDataWarning.open();
-                    } 
-                }           
-            }
+                       // Audible alert - type set earlier
+                       GLib.spawn_command_line_async('play ' + this.batteryLowSound);
+                       // Choose Alert type depending on whether Cinnamon 2.6 or higher when modal alerts available
+                       if (this.versionCompare(GLib.getenv('CINNAMON_VERSION'), "2.6") <= 0) {
+                            Main.criticalNotify(_("Battery Monitor Applet Alert"), _("The Battery Level has fallen to your alert level\n\neither reconnect to a power source,\n\nclose down your work and suspend or shutdown the machine\n\n"));
+                       } else {
+                             new ModalDialog.NotifyDialog(_("The Battery Level has fallen to your alert level\n\n either reconnect to a power source,\n\nclose down your work and suspend or shutdown the machine\n\n")).open();
+                      }
+                   }
+                }
+             }
 
-
-  
              if (Math.floor(this.batteryPercentage) < Math.floor(this.alertPercentage)  / 1.5 ) {
                 if (this.flashFlag2) {
                     this.actor.style_class = 'bam-limit-exceeded2';
@@ -328,37 +363,86 @@ MyApplet.prototype = {
                     this.actor.style_class = 'bam-limit-exceeded';
                     this.flashFlag2 = true;
                 }
-                 
+
                 if (this.batteryState.indexOf("discharg") > -1) {
                     this.batteryMessage = _("Battery Critical will Suspend unless connected to mains") + " "
                     if ( this.batteryPercentage < this.lastBatteryPercentage ) {
                        // Audible alert moved from suspendScript in v32_1.0.0
-                       GLib.spawn_command_line_async('play "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"');
+                       //GLib.spawn_command_line_async('play "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"');
+                       GLib.spawn_command_line_async('play ' + this.batteryLowSound);
                        GLib.spawn_command_line_async('sh ' + this.appletPath + '/suspendScript');
-
                     }
-                }    
-            }
-  
-                if ( !this.batteryState.indexOf("discharg") > -1) {
- //                      this.alertFlag = false;
-                }
+                 }
+              }
 
-                this.lastBatteryPercentage = this.batteryPercentage
-/*  
- 
-If less than 4% then shutdown completely immediately. 
+              this.lastBatteryPercentage = this.batteryPercentage
+/*
+If less than 4% then shutdown completely immediately.
 May be implemented in future version
-
 */
-            this.appletLabel.set_text(this.batteryMessage + this.batteryPercentage + "%");
-
+             // set Tooltip
              this.set_applet_tooltip(_("Charge:") + " " + this.batteryPercentage + "% " + "(" + this.batteryState + ")" + " " + _("Alert:") + " " + Math.floor(this.alertPercentage) + "% "  + _("Suspend:") + " " + Math.floor(this.alertPercentage / 1.5)+ "%" ) ;
+             // Now select icon to dispaly
+             if (this.batteryPercentage == 100 && !this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryCharging100 }
+             if (this.batteryPercentage == 100 && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.battery100 }
 
-           this.menuitemInfo2.label.text = _("Percentage Charge:") + " " + this.batteryPercentage + "% " + "(" + this.batteryState + ")" + " " + _("Alert at:") + " "   + Math.floor(this.alertPercentage)+ "% " + _("Suspend at:") + " " + Math.floor(this.alertPercentage / 1.5)+ "%";
+             if (this.batteryPercentage < 100 && this.batteryPercentage >= 80 && !this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryCharging080 }
+             if (this.batteryPercentage < 100  && this.batteryPercentage >= 80 && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.battery080 }
+
+             if (this.batteryPercentage < 80 && this.batteryPercentage >= 60 && !this.batteryState.indexOf("discharg") > -1) {
+        this.batteryIcon = this.batteryCharging060 }
+             if (this.batteryPercentage < 80  && this.batteryPercentage >= 60 && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.battery060 }
+
+             if (this.batteryPercentage < 60 && this.batteryPercentage >= Math.floor(this.alertPercentage) && !this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryCharging040 }
+if (this.batteryPercentage < 60  && this.batteryPercentage >= Math.floor(this.alertPercentage) && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.battery040 }
+
+             if (this.batteryPercentage < Math.floor(this.alertPercentage) && this.batteryPercentage >= Math.floor(this.alertPercentage / 1.5) && !this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryChargingCaution }
+             if (this.batteryPercentage < Math.floor(this.alertPercentage)  && this.batteryPercentage >= Math.floor(this.alertPercentage / 1.5) && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryCaution }
+
+             if (this.batteryPercentage < Math.floor(this.alertPercentage / 1.5) && this.batteryPercentage >= 0 && !this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryChargingLow }
+             if (this.batteryPercentage < Math.floor(this.alertPercentage / 1.5)  && this.batteryPercentage >= 0 && this.batteryState.indexOf("discharg") > -1) {
+                  this.batteryIcon = this.batteryLow };
+
+             // Choose what to display based on Display Type from settings dropdown
+             if (this.displayType == "classicPlus" || this.displayType == "compactPlus" ||this.displayType == "icon"  ) {
+                 this.set_applet_icon_path(this.batteryIcon)
+             } else{
+                 this.hide_applet_icon();
+             }
+             if ( !(this.displayType == "classic" || this.displayType == "classicPlus") || !this.isHorizontal ) {
+    this.batteryMessage = ""
+             }
+
+
+
+             if (this.batteryPercentage == 100 && !this.isHorizontal ) {
+                this.set_applet_label(this.batteryMessage + this.batteryPercentage + "");
+             } else {
+                this.set_applet_label(this.batteryMessage + this.batteryPercentage + "%");
+             }
+
+             if ( this.displayType == "icon" ) {
+                 this.set_applet_label("");
+                 if (!this.isHorizontal) { this.hide_applet_label(true) };
+             } else {
+                 if (!this.isHorizontal) { this.hide_applet_label(false) };
+             }
+
+            // Set left click menu item 'label' for slider
+            this.menuitemInfo2.label.text = _("Percentage Charge:") + " " + this.batteryPercentage + "% " + "(" + this.batteryState + ")" + " " + _("Alert at:") + " "   + Math.floor(this.alertPercentage)+ "% " + _("Suspend at:") + " " + Math.floor(this.alertPercentage / 1.5)+ "%";
 
             // Get temperatures via asyncronous script ready for next cycle
-            GLib.spawn_command_line_async('sh ' + this.batterytempscript);
+            GLib.spawn_command_line_async('sh ' + this.batteryscript);
 
         } catch (e) {
             global.logError(e);
@@ -388,16 +472,16 @@ function main(metadata, orientation, panelHeight, instance_id) {
     return myApplet;
 }
 /*
-Version   1.2.2
+Version   1.3.0
 v30_1.0.0 Developed using code from NUMA, Bumblebee and Timer Applets
           Includes changes to work with Mint 18 and Cinnamon 3.0 -gedit -> xed
-          Tested with Cinnamon 3.0 in Mint 18 
+          Tested with Cinnamon 3.0 in Mint 18
           TEST CODE IN PLACE namely batteryPercentage divided by 4 to allow testing
           Test Version without call to suspendScript
           Beautified
 v30_1.0.1 Code added to ensure valid readings of batteryPercentage
           Code added to 'flash' messages  and extend width with messages but only when discharging.
-          Code added to call Suspend script but only when percentage has fallen 
+          Code added to call Suspend script but only when percentage has fallen
              ie it will be called every 1% fall so it is re-enabled after returning from suspend
           Suspendscript active
           TEST CODE STILL IN PLACE so levels incorrect
@@ -446,6 +530,40 @@ v32_1.2.1 First major update following transition to cinnamon-spices-applets rep
 ### 1.2.3
  * Added CHANGELOG.md to applet folder with symbolic link to it in UUID so it shows on latest cinnamon spices web site.
  * CHANGELOG.md is a simplified and reformatted version of changelog.txt.
- * Changed 'view changelog' in context menu to use CHANGELOG.md 
+ * Changed 'view changelog' in context menu to use CHANGELOG.md
+### 1.3.0
+Now includes support for Vertical Panels, Battery icons and 5 display modes
+ * Renamed batterytempscript to batteryscript - cosmetic
+ * Change to improved form of l10n support function
+ * Code added to allow display on vertical panels and added on_orientation_changed function with call to initialise.
+ * Options of display of icon and shortening message text with prime aim of support of vertical panels
+ * Display Modes added to Configuration as Dropdown with 5 types (modes) and implemented. Includes a Classic mode which is the same as version 1.2.3 of applet.
+ * Removed some redundant code still present by mistake from earlier versions which affected vertical display
+ * Code comments improved and some commented out code removed.
+ * Update README.md, CHANGELOG.md and metadata.json
+ * Recreate batterymonitor.pot to allow translation support to be updated.
+### 1.3.1
+Bug Fix for use with early versions of Cinnamon
+ * Inhibited use of hide_applet_label() to Cinnamon version 3.2 or higher in vertical panels.
+ * Corrected Icon Only display mode
+### 1.3.2
+ * Add checks that sox and zenity are installed and warn that full facilities are not available without them.
+ * Improve handling of completely empty batteries.
+ * Update README.md, CHANGELOG.md and metadata.json
+ * Update batterymonitor.pot so translations can be updated.
+### 1.3.2.1
+ * Revert change on handling empty battery
+### 1.3.2.2
+ * Remove instance of depreciated code giving a harmless warning in .xsession-errors.
+### 1.3.3
+  * Use xdg-open in place of gedit or xed to allow use on more distros
+### 1.3.4
+  * Use ModalDialog.NotifyDialog or main.criticalNotify in place of internal code for Alerts
+  * Provide option of users sound file called batterymonitorwarning.mp3 in home folder
+   - Checks for presence and uses if found otherwises uses default
+   - puts up warning about high volumes and times in public spaces.
+### 1.3.5
+  * Update stylesheet to better match Cinnamon 4.0 System Styles - less rounded.
+  * Add an initial mechanism to provide persistence for user edits of the stylesheet.
 */
 

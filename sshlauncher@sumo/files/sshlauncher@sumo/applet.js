@@ -10,6 +10,7 @@ const MessageTray = imports.ui.messageTray;
 const Gio = imports.gi.Gio;
 const Gettext = imports.gettext;
 const UUID = "sshlauncher@sumo";
+const AppletDir = imports.ui.appletManager.appletMeta[UUID].path;
 
 Gettext.bindtextdomain(UUID, GLib.get_home_dir() + "/.local/share/locale")
 
@@ -17,8 +18,8 @@ function _(str) {
   return Gettext.dgettext(UUID, str);
 }
 
-function MyApplet(metadata, orientation) {
-  this._init(metadata, orientation);
+function MyApplet(metadata, orientation, panel_height, instance_id) {
+  this._init(metadata, orientation, panel_height, instance_id);
 };
 
 MyApplet.prototype = {
@@ -30,7 +31,7 @@ MyApplet.prototype = {
     this.set_applet_tooltip(_("SSH Launcher"));
 
     try {
-      this.set_applet_icon_name("network");
+      this.set_applet_icon_path(AppletDir + "/icon.png");
       this.menuManager = new PopupMenu.PopupMenuManager(this);
       this.menu = new Applet.AppletPopupMenu(this, orientation);
       this.menuManager.addMenu(this.menu);
@@ -64,16 +65,36 @@ MyApplet.prototype = {
     this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     try {
-      let [res, out, err, status] = GLib.spawn_command_line_sync('grep "^Host " .ssh/config');
+      let [res, out, err, status] = GLib.spawn_command_line_sync('grep -e "^Host " -e "^#GroupStart" -e "^#GroupEnd" .ssh/config');
       if(out.length!=0) {
+        let inGroup = false;
         let hosts = out.toString().split("\n");
+        let Grouper = null;
+
         for(let i=0; i<hosts.length; i++) {
           let host = hosts[i];
           if(host != "") {
+           if (host.startsWith("#GroupStart")) {
+                let hostname = host.replace("#GroupStart", "").trim();
+                if (hostname != "") {
+                    Grouper = new PopupMenu.PopupSubMenuMenuItem(hostname);
+                    this.menu.addMenuItem(Grouper);
+                    inGroup = true;
+                }                
+                continue;                
+           } else if (host === "#GroupEnd") {
+                inGroup = false;
+                continue;
+           }
+
             let hostname = host.replace("Host ", "");
             let item = new PopupMenu.PopupMenuItem(hostname);
             item.connect('activate', Lang.bind(this, function() { this.connectTo(hostname); }));
-            this.menu.addMenuItem(item);
+            if (inGroup) {
+              Grouper.menu.addMenuItem(item);
+            } else {
+              this.menu.addMenuItem(item);
+            }
           }
         }
       }
@@ -100,7 +121,7 @@ MyApplet.prototype = {
     }
     let terminal = this.gsettings.get_string("exec");
     Main.Util.spawnCommandLine(terminal + " -T \"" + hostname + "\" -e \"ssh " + flags + hostname + "\"");
-    let notification = new MessageTray.Notification(this.msgSource, _("SSH Launcher"), _("Connection opened to ") + hostname);
+    let notification = new MessageTray.Notification(this.msgSource, _("SSH Launcher"), _("Connection opened to ") + hostname + " using " + terminal);
     notification.setTransient(true);
     this.msgSource.notify(notification);
   },
